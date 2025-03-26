@@ -2,24 +2,33 @@ package main
 
 import (
 	"fmt"
-	"math/rand"
-	"time"
 
 	"github.com/infiniteCrank/mathbot/NeuralNetwork" // import your custom package
 )
 
-func main() {
-	// For reproducible random initialization
-	rand.Seed(time.Now().UnixNano())
+// Define an identity activation constant. Make sure your package's Train method handles this case.
+const IdentityActivation = 100
 
-	// Training data: sequences of five numbers and their following number.
-	// For example, [1,2,3,4,5] should predict 6.
+func main() {
+
+	// Original training data: sequences of five numbers predicting the next number.
+	// For example, [1,2,3,4,5] -> 6, etc.
 	trainingInputs := [][]float64{
 		{1, 2, 3, 4, 5},
 		{2, 3, 4, 5, 6},
 		{3, 4, 5, 6, 7},
 		{4, 5, 6, 7, 8},
 		{5, 6, 7, 8, 9},
+		{6, 7, 8, 9, 10},
+		{7, 8, 9, 10, 11},
+		{8, 9, 10, 11, 12},
+		{9, 10, 11, 12, 13},
+		{10, 11, 12, 13, 14},
+		{11, 12, 13, 14, 15},
+		{12, 13, 14, 15, 16},
+		{13, 14, 15, 16, 17},
+		{14, 15, 16, 17, 18},
+		{15, 16, 17, 18, 19},
 	}
 	trainingTargets := [][]float64{
 		{6},
@@ -27,34 +36,49 @@ func main() {
 		{8},
 		{9},
 		{10},
+		{11},
+		{12},
+		{13},
+		{14},
+		{15},
+		{16},
+		{17},
+		{18},
+		{19},
+		{20},
 	}
 
 	// Create a new neural network.
-	// We define the network with layer sizes: 5 -> 10 -> 1.
-	// For activations, we choose:
-	//   - Hidden layer: ReLUActivation
-	//   - Output layer: LeakyReLUActivation (acts nearly linear for positive numbers)
+	// Architecture: 5 input neurons, one hidden layer with 10 neurons, and 1 output neuron.
+	// We use ReLU for the hidden layer and Identity for the output layer.
 	nn := NeuralNetwork.NewNeuralNetwork(
 		[]int{5, 10, 1},
-		[]int{NeuralNetwork.ReLUActivation, NeuralNetwork.LeakyReLUActivation},
-		0.01,  // learning rate
-		0.001, // L2 regularization factor
+		[]int{NeuralNetwork.ReLUActivation, IdentityActivation},
+		0.001, // Lower learning rate.
+		0.001, // L2 regularization factor.
 	)
 
-	// Train the network.
-	// Here we train for 1000 iterations, decaying the learning rate by 0.99 every 100 epochs.
-	iterations := 1000
+	// Training parameters.
+	iterations := 100000
 	learningRateDecayFactor := 0.99
-	decayEpochs := 100
+	decayEpochs := 1000
+	miniBatchSize := 5 // With 5 training samples, process them all together.
 
 	fmt.Println("Training started...")
-	nn.Train(trainingInputs, trainingTargets, iterations, learningRateDecayFactor, decayEpochs, 5)
+	nn.Train(trainingInputs, trainingTargets, iterations, learningRateDecayFactor, decayEpochs, miniBatchSize)
 	fmt.Println("Training completed.")
 
-	// Now test the network.
-	// For the sequence [6,7,8,9,10] the expected prediction is 11.
+	// Test the network with a new sequence: [6,7,8,9,10].
 	testInput := []float64{6, 7, 8, 9, 10}
-	predicted := nn.PredictRegression(testInput)
+	// Normalize test input (same as training data).
+	for i := range testInput {
+		testInput[i] /= 10.0
+	}
 
-	fmt.Printf("For the input sequence %v, the network predicts: %v\n", testInput, predicted)
+	// Use your regression prediction method (assumed to be provided in your package)
+	predicted := nn.PredictRegression(testInput)
+	// Scale the prediction back.
+	predicted[0] *= 10.0
+
+	fmt.Printf("For the input sequence %v, the network predicts: %v\n", []float64{6, 7, 8, 9, 10}, predicted)
 }

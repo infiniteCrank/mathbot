@@ -197,77 +197,115 @@ func NewNeuralNetwork(layerSizes []int, activations []int, learningRate float64,
 
 // Train the network with Batch Normalization and L2 regularization
 func (nn *NeuralNetwork) Train(inputs [][]float64, targets [][]float64, iterations int,
-	learningRateDecayFactor float64, decayEpochs int) {
+	learningRateDecayFactor float64, decayEpochs int, miniBatchSize int) {
 
-	for i := 0; i < iterations; i++ {
-		// Adjust the learning rate based on the epoch
-		if i > 0 && i%decayEpochs == 0 {
+	totalSamples := len(inputs)
+	for iter := 0; iter < iterations; iter++ {
+		// Decay learning rate periodically.
+		if iter > 0 && iter%decayEpochs == 0 {
 			nn.learningRate *= learningRateDecayFactor
 		}
 
-		for j, input := range inputs {
-			// Forward pass
-			outputs := make([][]float64, len(nn.layers))
-			outputs[0] = input
+		// Process mini-batches.
+		for start := 0; start < totalSamples; start += miniBatchSize {
+			end := start + miniBatchSize
+			if end > totalSamples {
+				end = totalSamples
+			}
+			// Create mini-batch slices.
+			batchInputs := inputs[start:end]   // [][]float64: batchSize x inputDimension
+			batchTargets := targets[start:end] // [][]float64: batchSize x targetDimension
+			batchSize := len(batchInputs)
+
+			// Allocate storage for outputs per layer.
+			// outputs[0] holds the mini-batch input.
+			outputs := make([][][]float64, len(nn.layers)+1)
+			outputs[0] = batchInputs
+
+			// To store batch normalization statistics (if needed).
 			batchMeans := make([][]float64, len(nn.layers))
 			batchVariances := make([][]float64, len(nn.layers))
 
-			// Compute forward pass with batch normalization
-			for k := 1; k < len(nn.layers); k++ {
-				outputs[k], batchMeans[k], batchVariances[k] = nn.layers[k-1].Forward(outputs[k], true)
+			// Forward pass: propagate mini-batch through each layer.
+			for k := 1; k <= len(nn.layers); k++ {
+				out, means, variances := nn.layers[k-1].ForwardBatch(outputs[k-1], true)
+				outputs[k] = out
+				batchMeans[k-1] = means
+				batchVariances[k-1] = variances
 			}
 
-			// Backward pass
-			errors := make([][]float64, len(nn.layers))
-			errors[len(nn.layers)-1] = make([]float64, nn.layers[len(nn.layers)-1].outputs)
-			for k := range errors[len(nn.layers)-1] {
-				errors[len(nn.layers)-1][k] = targets[j][k] - outputs[len(nn.layers)-1][k] // Compute output layer errors
-			}
+			// Final outputs from the network for this mini-batch.
+			finalOutputs := outputs[len(nn.layers)] // shape: batchSize x outputDimension
 
-			for k := len(nn.layers) - 1; k >= 0; k-- {
-				for x := 0; x < nn.layers[k].outputs; x++ {
-					// Calculate the gradient based on the activation function
-					var gradient float64
-					switch nn.layers[k].activation {
-					case SigmoidActivation:
-						gradient = sigmoidDerivative(outputs[k+1][x])
-					case ReLUActivation:
-						gradient = reluDerivative(outputs[k+1][x])
-					case TanhActivation:
-						gradient = tanhDerivative(outputs[k+1][x])
-					case LeakyReLUActivation:
-						gradient = leakyReLUDerivative(outputs[k+1][x])
-					case SoftmaxActivation:
-						// Cross-entropy loss and softmax gradient are combined, we treat the output directly
-						gradient = outputs[k+1][x] * (1 - outputs[k+1][x]) // Note this is a placeholder.
-					}
-					adjustment := errors[k][x] * gradient * nn.learningRate // Calculate adjustment for weights
-
-					// Update weights with L2 regularization
-					for w := 0; w < nn.layers[k].inputs; w++ {
-						nn.layers[k].weights[w][x] += adjustment * outputs[k][w]
-						nn.layers[k].weights[w][x] -= nn.l2Regularization * nn.learningRate * nn.layers[k].weights[w][x]
-					}
-
-					// Update biases and batch normalization parameters
-					nn.layers[k].biases[x] += adjustment // Update bias
-					nn.layers[k].gamma[x] += adjustment  // Update scale parameter (gamma)
-					nn.layers[k].beta[x] += adjustment   // Update shift parameter (beta)
+			// Compute errors for the output layer for each sample.
+			errors := make([][][]float64, len(nn.layers))
+			errors[len(nn.layers)-1] = make([][]float64, batchSize)
+			for b := 0; b < batchSize; b++ {
+				errVec := make([]float64, len(finalOutputs[b]))
+				for j := 0; j < len(finalOutputs[b]); j++ {
+					errVec[j] = batchTargets[b][j] - finalOutputs[b][j]
 				}
+				errors[len(nn.layers)-1][b] = errVec
+			}
 
-				// Propagate errors backward
-				if k > 0 { // If not the first layer
-					for m := 0; m < nn.layers[k-1].outputs; m++ {
-						sumError := 0.0
-						for n := 0; n < nn.layers[k].outputs; n++ {
-							sumError += errors[k][n] * nn.layers[k].weights[m][n] // Compute error for the previous layer
+			// Backward pass: propagate errors from the last layer back to the first.
+			for l := len(nn.layers) - 1; l >= 0; l-- {
+				// For each neuron j in layer l, compute the average gradient over the mini-batch.
+				for j := 0; j < nn.layers[l].outputs; j++ {
+					var gradientSum float64 = 0.0
+					for b := 0; b < batchSize; b++ {
+						var grad float64
+						// Use the activation derivative on the output from this layer.
+						switch nn.layers[l].activation {
+						case SigmoidActivation:
+							grad = sigmoidDerivative(outputs[l+1][b][j])
+						case ReLUActivation:
+							grad = reluDerivative(outputs[l+1][b][j])
+						case TanhActivation:
+							grad = tanhDerivative(outputs[l+1][b][j])
+						case LeakyReLUActivation:
+							grad = leakyReLUDerivative(outputs[l+1][b][j])
+						case SoftmaxActivation:
+							grad = outputs[l+1][b][j] * (1 - outputs[l+1][b][j])
 						}
-						errors[k-1][m] = sumError
+						gradientSum += errors[l][b][j] * grad
+					}
+					avgGradient := gradientSum / float64(batchSize)
+					// Update weights for neuron j in layer l.
+					for i := 0; i < nn.layers[l].inputs; i++ {
+						var deltaSum float64 = 0.0
+						for b := 0; b < batchSize; b++ {
+							deltaSum += avgGradient * outputs[l][b][i]
+						}
+						avgDelta := (deltaSum / float64(batchSize)) * nn.learningRate
+						// Weight update with L2 regularization.
+						nn.layers[l].weights[i][j] += avgDelta
+						nn.layers[l].weights[i][j] -= nn.l2Regularization * nn.learningRate * nn.layers[l].weights[i][j]
+					}
+					// Update bias and batch normalization parameters for neuron j.
+					nn.layers[l].biases[j] += avgGradient * nn.learningRate
+					nn.layers[l].gamma[j] += avgGradient * nn.learningRate
+					nn.layers[l].beta[j] += avgGradient * nn.learningRate
+				}
+
+				// Propagate error to the previous layer if this is not the first layer.
+				if l > 0 {
+					errors[l-1] = make([][]float64, batchSize)
+					for b := 0; b < batchSize; b++ {
+						prevErr := make([]float64, nn.layers[l-1].outputs)
+						for i := 0; i < nn.layers[l-1].outputs; i++ {
+							sumError := 0.0
+							for j := 0; j < nn.layers[l].outputs; j++ {
+								sumError += errors[l][b][j] * nn.layers[l].weights[i][j]
+							}
+							prevErr[i] = sumError
+						}
+						errors[l-1][b] = prevErr
 					}
 				}
-			}
-		}
-	}
+			} // End of backward pass.
+		} // End of mini-batch loop.
+	} // End of iterations.
 }
 
 // K-Fold Cross Validation Function
@@ -287,7 +325,7 @@ func performKFoldCrossValidation(nn *NeuralNetwork, inputs [][]float64, targets 
 		trainingTargets := append(targets[:i*foldSize], targets[(i+1)*foldSize:]...)
 
 		// Train the model on training set
-		nn.Train(trainingInputs, trainingTargets, iterations, learningRateDecayFactor, decayEpochs)
+		nn.Train(trainingInputs, trainingTargets, iterations, learningRateDecayFactor, decayEpochs, 5)
 
 		// Evaluate the model
 		validationLoss := 0.0
@@ -356,4 +394,62 @@ func (nn *NeuralNetwork) PredictRegression(input []float64) []float64 {
 		output, _, _ = layer.Forward(output, false)
 	}
 	return output
+}
+
+func (l *Layer) ForwardBatch(inputs [][]float64, training bool) ([][]float64, []float64, []float64) {
+	batchSize := len(inputs)
+	// Allocate outputs: each sample will produce a slice of length l.outputs.
+	outputs := make([][]float64, batchSize)
+	for b, input := range inputs {
+		out := make([]float64, l.outputs)
+		for j := 0; j < l.outputs; j++ {
+			sum := 0.0
+			for i := 0; i < l.inputs; i++ {
+				sum += input[i] * l.weights[i][j]
+			}
+			sum += l.biases[j]
+			out[j] = sum
+		}
+		outputs[b] = out
+	}
+
+	var batchMeans, batchVariances []float64
+	if training {
+		batchMeans = make([]float64, l.outputs)
+		batchVariances = make([]float64, l.outputs)
+		// Compute mean for each neuron over the batch.
+		for j := 0; j < l.outputs; j++ {
+			sum := 0.0
+			for b := 0; b < batchSize; b++ {
+				sum += outputs[b][j]
+			}
+			mean := sum / float64(batchSize)
+			batchMeans[j] = mean
+		}
+		// Compute variance for each neuron over the batch.
+		for j := 0; j < l.outputs; j++ {
+			sumSq := 0.0
+			for b := 0; b < batchSize; b++ {
+				diff := outputs[b][j] - batchMeans[j]
+				sumSq += diff * diff
+			}
+			variance := sumSq / float64(batchSize)
+			batchVariances[j] = variance
+		}
+		// Normalize outputs using batch statistics.
+		for b := 0; b < batchSize; b++ {
+			for j := 0; j < l.outputs; j++ {
+				outputs[b][j] = l.gamma[j]*(outputs[b][j]-batchMeans[j])/math.Sqrt(batchVariances[j]+1e-8) + l.beta[j]
+			}
+		}
+	} else {
+		// In inference mode, simply adjust with gamma and beta.
+		for b := 0; b < batchSize; b++ {
+			for j := 0; j < l.outputs; j++ {
+				outputs[b][j] = l.gamma[j]*outputs[b][j] + l.beta[j]
+			}
+		}
+	}
+
+	return outputs, batchMeans, batchVariances
 }

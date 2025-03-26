@@ -48,7 +48,7 @@ func main() {
 	decayEpochs := 100
 
 	fmt.Println("Training started...")
-	nn.Train(trainingInputs, trainingTargets, iterations, learningRateDecayFactor, decayEpochs)
+	nn.Train(trainingInputs, trainingTargets, iterations, learningRateDecayFactor, decayEpochs, 5)
 	fmt.Println("Training completed.")
 
 	// Now test the network.

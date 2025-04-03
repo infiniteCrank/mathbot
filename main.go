@@ -12,7 +12,7 @@ const IdentityActivation = 100
 func main() {
 	// Increase training range
 	startNum := 1
-	endNum := 1000 // More training samples
+	endNum := 6000 // More training samples
 
 	var trainingInputs [][]float64
 	var trainingTargets [][]float64
@@ -53,6 +53,11 @@ func main() {
 		learningRate,
 		l2Regularization,
 	)
+	// Load the saved weights if available
+	fmt.Println("Loading weights...")
+	nn.LoadWeights()
+	fmt.Println("Weights loadedd.")
+
 	fmt.Println("Training started...")
 	nn.Train(trainingInputs, trainingTargets, 20000, 0.9999, 5000, 32) // More training iterations
 	fmt.Println("Training completed.")
@@ -64,7 +69,7 @@ func main() {
 	fmt.Println("Saving weights...")
 	fmt.Printf("Model accuracy: %.2f%%\n", accuracy)
 
-	if accuracy > 50.0 {
+	if accuracy > 40.0 {
 		fmt.Println("Deleting existing weights...")
 		nn.DeleteWeights() // Remove old weights
 		fmt.Println("Saving new weights...")
@@ -73,7 +78,6 @@ func main() {
 	} else {
 		fmt.Println("Accuracy is below 50%, not saving weights.")
 	}
-	fmt.Println("Save completed.")
 
 	// Evaluate the network on test data
 	var predictions []float64

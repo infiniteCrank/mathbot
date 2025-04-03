@@ -2,85 +2,106 @@ package main
 
 import (
 	"fmt"
+	"math/rand" // Ensure you import rand for variability in sequence generation
 
-	"github.com/infiniteCrank/mathbot/NeuralNetwork" // import your custom package
+	"github.com/infiniteCrank/mathbot/NeuralNetwork"
 )
 
-// Define an identity activation constant.
-// Ensure your package handles IdentityActivation in the backward pass.
 const IdentityActivation = 100
 
 func main() {
+	// Increase training range
+	startNum := 1
+	endNum := 1000 // More training samples
 
-	// Generate training data dynamically.
-	// Let's create sequences from 1 to 50, so that each input has five numbers and the target is the next number.
 	var trainingInputs [][]float64
 	var trainingTargets [][]float64
-	startNum := 1
-	endNum := 50
 
-	// We need to ensure that i+5 is within our desired range.
+	// Introduce variability in sequence generation
 	for i := startNum; i <= endNum-5; i++ {
-		// Create an input sequence of five consecutive numbers.
 		sequence := []float64{
-			float64(i),
-			float64(i + 1),
-			float64(i + 2),
-			float64(i + 3),
-			float64(i + 4),
-		}
+			float64(i) + rand.Float64()*0.1,
+			float64(i+1) + rand.Float64()*0.1,
+			float64(i+2) + rand.Float64()*0.1,
+			float64(i+3) + rand.Float64()*0.1,
+			float64(i+4) + rand.Float64()*0.1}
 		trainingInputs = append(trainingInputs, sequence)
-		// The target is the next number.
 		trainingTargets = append(trainingTargets, []float64{float64(i + 5)})
 	}
 
 	// Normalize inputs and targets.
-	// For this example, we divide by 10 so that values are roughly between 0 and 10 become 0 and 1.
+	maxValue := float64(endNum + 5)
 	for i := range trainingInputs {
 		for j := range trainingInputs[i] {
-			trainingInputs[i][j] /= 10.0
+			trainingInputs[i][j] /= maxValue
 		}
 	}
 	for i := range trainingTargets {
-		for j := range trainingTargets[i] {
-			trainingTargets[i][j] /= 10.0
-		}
+		trainingTargets[i][0] /= maxValue
 	}
 
-	// Print how many training examples we have.
 	fmt.Printf("Generated %d training examples.\n", len(trainingInputs))
 
-	// Create a new neural network.
-	// Architecture: 5 input neurons, one hidden layer with 10 neurons, and 1 output neuron.
-	// Use ReLU for the hidden layer and Identity for the output layer.
+	// Set initial hyperparameters.
+	learningRate := 3.125e-05 // Increase the learning rate for faster convergence
+	l2Regularization := 3.125e-06
+
+	// Create a neural network with an adjusted architecture
 	nn := NeuralNetwork.NewNeuralNetwork(
-		[]int{5, 10, 1},
-		[]int{NeuralNetwork.ReLUActivation, IdentityActivation},
-		0.0001, // Lower learning rate.
-		0.001,  // L2 regularization factor.
+		[]int{5, 25, 10, 1}, // Adjusted layers
+		[]int{NeuralNetwork.LeakyReLUActivation, NeuralNetwork.LeakyReLUActivation, IdentityActivation},
+		learningRate,
+		l2Regularization,
 	)
-
-	// Training parameters.
-	iterations := 5000000
-	learningRateDecayFactor := 0.99
-	decayEpochs := 1000
-	miniBatchSize := len(trainingInputs) // Use full batch or set to a smaller number if desired.
-
 	fmt.Println("Training started...")
-	nn.Train(trainingInputs, trainingTargets, iterations, learningRateDecayFactor, decayEpochs, miniBatchSize)
+	nn.Train(trainingInputs, trainingTargets, 20000, 0.9999, 5000, 32) // More training iterations
 	fmt.Println("Training completed.")
 
-	// Test the network with a new sequence: [6, 7, 8, 9, 10].
-	testInput := []float64{6, 7, 8, 9, 10}
-	// Normalize test input.
-	for i := range testInput {
-		testInput[i] /= 10.0
+	// Evaluate accuracy after training
+	accuracy := NeuralNetwork.EvaluateAccuracy(nn, trainingInputs, trainingTargets, maxValue*0.05, maxValue)
+	fmt.Printf("Model accuracy: %.2f%%\n", accuracy)
+
+	fmt.Println("Saving weights...")
+	// Uncomment this line if you have a weight-saving function implemented
+	// nn.SaveWeights()
+	fmt.Println("Save completed.")
+
+	// Evaluate the network on test data
+	var predictions []float64
+	var actuals []float64
+
+	for i := 1001; i <= 1020; i++ { // Test on a small range outside training data
+		testInput := []float64{float64(i), float64(i + 1), float64(i + 2), float64(i + 3), float64(i + 4)}
+		for j := range testInput {
+			testInput[j] /= maxValue // Normalize for input
+		}
+
+		predicted := nn.PredictRegression(testInput)
+		predicted[0] *= maxValue // Rescale back
+
+		actual := float64(i + 5)
+		predictions = append(predictions, predicted[0])
+		actuals = append(actuals, actual)
 	}
 
-	// Use your regression prediction method from the package.
-	predicted := nn.PredictRegression(testInput)
-	// Scale the prediction back.
-	predicted[0] *= 10.0
+	// Compute metrics
+	mse := NeuralNetwork.CalculateMSE(predictions, actuals)
+	rmse := NeuralNetwork.CalculateRMSE(predictions, actuals)
+	mae := NeuralNetwork.CalculateMAE(predictions, actuals)
 
-	fmt.Printf("For the input sequence %v, the network predicts: %v\n", []float64{6, 7, 8, 9, 10}, predicted)
+	fmt.Printf("Evaluation Metrics:\nMSE: %.6f, RMSE: %.6f, MAE: %.6f\n", mse, rmse, mae)
+
+	// Print sample predictions
+	fmt.Println("Sample Predictions vs Actual Values:")
+	for i := 0; i < min(5, len(predictions)); i++ {
+		fmt.Printf("Predicted: %.4f, Actual: %.4f\n", predictions[i], actuals[i])
+	}
+}
+
+// Helper function to get the minimum of two values
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

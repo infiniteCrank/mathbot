@@ -1,10 +1,15 @@
 package NeuralNetwork
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
+	"log"
 	"math"
 	"math/rand"
 	"time"
+
+	"github.com/infiniteCrank/mathbot/db"
 )
 
 // Activation Function Types
@@ -15,6 +20,13 @@ const (
 	LeakyReLUActivation
 	SoftmaxActivation  // For classification tasks
 	IdentityActivation // For regression tasks: output = weighted sum (i.e. linear)
+)
+
+// Adam hyperparameters (tunable)
+const (
+	beta1   = 0.9
+	beta2   = 0.999
+	epsilon = 1e-8
 )
 
 // Activation functions
@@ -86,29 +98,45 @@ type Layer struct {
 	activation int
 	gamma      []float64 // for batch normalization (scale)
 	beta       []float64 // for batch normalization (shift)
+
+	// Adam optimizer parameters for weights and biases:
+	weightM [][]float64 // First moment estimates for weights
+	weightV [][]float64 // Second moment estimates for weights
+	biasM   []float64   // First moment estimates for biases
+	biasV   []float64   // Second moment estimates for biases
 }
 
 // NewLayer creates and initializes a new layer.
 func NewLayer(inputs, outputs int, activation int) *Layer {
 	weights := make([][]float64, inputs)
+	weightM := make([][]float64, inputs)
+	weightV := make([][]float64, inputs)
 	for i := range weights {
 		weights[i] = make([]float64, outputs)
+		weightM[i] = make([]float64, outputs)
+		weightV[i] = make([]float64, outputs)
 		for j := range weights[i] {
 			// Scale down the initialization to help training stability.
 			weights[i][j] = rand.NormFloat64() * 0.01
+			weightM[i][j] = 0.0
+			weightV[i][j] = 0.0
 		}
 	}
 
 	biases := make([]float64, outputs)
-	for i := range biases {
-		biases[i] = 0.0
+	biasM := make([]float64, outputs)
+	biasV := make([]float64, outputs)
+	for j := range biases {
+		biases[j] = 0.0
+		biasM[j] = 0.0
+		biasV[j] = 0.0
 	}
 
 	gamma := make([]float64, outputs)
 	beta := make([]float64, outputs)
-	for i := range gamma {
-		gamma[i] = 1.0
-		beta[i] = 0.0
+	for j := range gamma {
+		gamma[j] = 1.0
+		beta[j] = 0.0
 	}
 
 	return &Layer{
@@ -119,6 +147,10 @@ func NewLayer(inputs, outputs int, activation int) *Layer {
 		activation: activation,
 		gamma:      gamma,
 		beta:       beta,
+		weightM:    weightM,
+		weightV:    weightV,
+		biasM:      biasM,
+		biasV:      biasV,
 	}
 }
 
@@ -254,7 +286,7 @@ func calculateError(outputs []float64, targets []float64) float64 {
 
 // NeuralNetwork structure
 type NeuralNetwork struct {
-	layers           []*Layer
+	Layers           []*Layer
 	learningRate     float64
 	l2Regularization float64
 }
@@ -265,7 +297,7 @@ type NeuralNetwork struct {
 func NewNeuralNetwork(layerSizes []int, activations []int, learningRate float64, l2Regularization float64) *NeuralNetwork {
 	nn := &NeuralNetwork{learningRate: learningRate, l2Regularization: l2Regularization}
 	for i := 0; i < len(layerSizes)-1; i++ {
-		nn.layers = append(nn.layers, NewLayer(layerSizes[i], layerSizes[i+1], activations[i]))
+		nn.Layers = append(nn.Layers, NewLayer(layerSizes[i], layerSizes[i+1], activations[i]))
 	}
 	return nn
 }
@@ -274,22 +306,24 @@ func NewNeuralNetwork(layerSizes []int, activations []int, learningRate float64,
 // This method is exported for inference.
 func (nn *NeuralNetwork) PredictRegression(input []float64) []float64 {
 	currentOutput := input
-	for _, layer := range nn.layers {
+	for _, layer := range nn.Layers {
 		out, _, _ := layer.Forward(currentOutput, false)
 		currentOutput = out
 	}
 	return currentOutput
 }
 
-// Train trains the neural network using mini-batch gradient descent.
+// Train trains the neural network using mini-batch gradient descent with Adam optimizer.
 // It logs the average training loss every printEvery iterations.
 func (nn *NeuralNetwork) Train(inputs [][]float64, targets [][]float64, iterations int,
 	learningRateDecayFactor float64, decayEpochs int, miniBatchSize int) {
 
 	totalSamples := len(inputs)
-	printEvery := 100000 // adjust as desired
+	printEvery := 100      // Adjust as desired
+	thresholdLoss := 0.009 // Early stopping threshold for average loss
 
 	startTime := time.Now()
+	adamTimeStep := 0 // Global counter for Adam updates.
 
 	for iter := 0; iter < iterations; iter++ {
 		// Decay the learning rate periodically.
@@ -308,43 +342,37 @@ func (nn *NeuralNetwork) Train(inputs [][]float64, targets [][]float64, iteratio
 			batchSize := len(batchInputs)
 
 			// Forward pass through all layers.
-			// outputs[k] will be a batch ([][]float64) for layer k, with outputs[0] being the batchInputs.
-			outputs := make([][][]float64, len(nn.layers)+1)
+			outputs := make([][][]float64, len(nn.Layers)+1)
 			outputs[0] = batchInputs
 
-			// Store batch normalization statistics if needed.
-			batchMeans := make([][]float64, len(nn.layers))
-			batchVariances := make([][]float64, len(nn.layers))
-
-			for k := 1; k <= len(nn.layers); k++ {
-				out, means, variances := nn.layers[k-1].ForwardBatch(outputs[k-1], true)
+			for k := 1; k <= len(nn.Layers); k++ {
+				out, _, _ := nn.Layers[k-1].ForwardBatch(outputs[k-1], true)
 				outputs[k] = out
-				batchMeans[k-1] = means
-				batchVariances[k-1] = variances
 			}
 
-			finalOutputs := outputs[len(nn.layers)] // shape: batchSize x outputDimension
+			finalOutputs := outputs[len(nn.Layers)] // shape: batchSize x outputDimension
 
 			// Compute error for the output layer.
-			errors := make([][][]float64, len(nn.layers))
-			errors[len(nn.layers)-1] = make([][]float64, batchSize)
+			errors := make([][][]float64, len(nn.Layers))
+			errors[len(nn.Layers)-1] = make([][]float64, batchSize)
 			for b := 0; b < batchSize; b++ {
 				errVec := make([]float64, len(finalOutputs[b]))
 				for j := 0; j < len(finalOutputs[b]); j++ {
 					errVec[j] = batchTargets[b][j] - finalOutputs[b][j]
 				}
-				errors[len(nn.layers)-1][b] = errVec
+				errors[len(nn.Layers)-1][b] = errVec
 			}
 
+			// Increment global Adam time step.
+			adamTimeStep++
+
 			// Backward pass: loop from last layer to first.
-			for l := len(nn.layers) - 1; l >= 0; l-- {
-				// For each neuron j in layer l, compute the average gradient over the mini-batch.
-				for j := 0; j < nn.layers[l].outputs; j++ {
+			for l := len(nn.Layers) - 1; l >= 0; l-- {
+				for j := 0; j < nn.Layers[l].outputs; j++ {
 					gradientSum := 0.0
 					for b := 0; b < batchSize; b++ {
 						var grad float64
-						// Compute derivative based on the activation.
-						switch nn.layers[l].activation {
+						switch nn.Layers[l].activation {
 						case SigmoidActivation:
 							grad = sigmoidDerivative(outputs[l+1][b][j])
 						case ReLUActivation:
@@ -361,60 +389,148 @@ func (nn *NeuralNetwork) Train(inputs [][]float64, targets [][]float64, iteratio
 						gradientSum += errors[l][b][j] * grad
 					}
 					avgGradient := gradientSum / float64(batchSize)
-					// Update weights for neuron j.
-					for i := 0; i < nn.layers[l].inputs; i++ {
+					// Update weights for neuron j using Adam.
+					for i := 0; i < nn.Layers[l].inputs; i++ {
 						deltaSum := 0.0
 						for b := 0; b < batchSize; b++ {
 							deltaSum += avgGradient * outputs[l][b][i]
 						}
-						avgDelta := (deltaSum / float64(batchSize)) * nn.learningRate
-						nn.layers[l].weights[i][j] += avgDelta
-						nn.layers[l].weights[i][j] -= nn.l2Regularization * nn.learningRate * nn.layers[l].weights[i][j]
+						avgDelta := deltaSum / float64(batchSize)
+
+						// Adam update for weight.
+						m := beta1*nn.Layers[l].weightM[i][j] + (1-beta1)*avgDelta
+						v := beta2*nn.Layers[l].weightV[i][j] + (1-beta2)*avgDelta*avgDelta
+						mHat := m / (1 - math.Pow(beta1, float64(adamTimeStep)))
+						vHat := v / (1 - math.Pow(beta2, float64(adamTimeStep)))
+						weightUpdate := nn.learningRate * mHat / (math.Sqrt(vHat) + epsilon)
+
+						nn.Layers[l].weights[i][j] += weightUpdate
+
+						// Apply L2 regularization.
+						nn.Layers[l].weights[i][j] -= nn.l2Regularization * nn.learningRate * nn.Layers[l].weights[i][j]
+
+						// Save updated moments.
+						nn.Layers[l].weightM[i][j] = m
+						nn.Layers[l].weightV[i][j] = v
 					}
-					// Update biases and batch norm parameters.
-					nn.layers[l].biases[j] += avgGradient * nn.learningRate
-					nn.layers[l].gamma[j] += avgGradient * nn.learningRate
-					nn.layers[l].beta[j] += avgGradient * nn.learningRate
+
+					// Adam update for bias.
+					mBias := beta1*nn.Layers[l].biasM[j] + (1-beta1)*avgGradient
+					vBias := beta2*nn.Layers[l].biasV[j] + (1-beta2)*avgGradient*avgGradient
+					mHatBias := mBias / (1 - math.Pow(beta1, float64(adamTimeStep)))
+					vHatBias := vBias / (1 - math.Pow(beta2, float64(adamTimeStep)))
+					biasUpdate := nn.learningRate * mHatBias / (math.Sqrt(vHatBias) + epsilon)
+					nn.Layers[l].biases[j] += biasUpdate
+
+					// Save updated bias moments.
+					nn.Layers[l].biasM[j] = mBias
+					nn.Layers[l].biasV[j] = vBias
 				}
 
 				// Propagate errors to the previous layer.
 				if l > 0 {
 					errors[l-1] = make([][]float64, batchSize)
 					for b := 0; b < batchSize; b++ {
-						prevErr := make([]float64, nn.layers[l-1].outputs)
-						for i := 0; i < nn.layers[l-1].outputs; i++ {
+						prevErr := make([]float64, nn.Layers[l-1].outputs)
+						for i := 0; i < nn.Layers[l-1].outputs; i++ {
 							sumError := 0.0
-							for j := 0; j < nn.layers[l].outputs; j++ {
-								sumError += errors[l][b][j] * nn.layers[l].weights[i][j]
+							for j := 0; j < nn.Layers[l].outputs; j++ {
+								sumError += errors[l][b][j] * nn.Layers[l].weights[i][j]
 							}
 							prevErr[i] = sumError
 						}
 						errors[l-1][b] = prevErr
 					}
 				}
-			} // end backward pass
-		} // end mini-batch loop
+			} // End of backward pass
+		} // End of mini-batch processing
 
-		// Optionally log training loss every printEvery iterations.
+		// Calculate average loss over the entire training set every printEvery iterations.
 		if iter%printEvery == 0 {
 			totalLoss := 0.0
 			sampleCount := 0
 			// Compute loss over entire training set.
 			for b := 0; b < totalSamples; b++ {
-				// Forward pass for each sample.
 				current := inputs[b]
-				for _, layer := range nn.layers {
+				for _, layer := range nn.Layers {
 					out, _, _ := layer.Forward(current, false)
 					current = out
 				}
-				loss := calculateError(current, targets[b])
+				loss := CalculateMSE([]float64{current[0]}, []float64{targets[b][0]}) // Calculate squared error only
 				totalLoss += loss
 				sampleCount++
 			}
 			avgLoss := totalLoss / float64(sampleCount)
 			fmt.Printf("Iteration %d, Average Loss: %v\n", iter, avgLoss)
+
+			// Early stopping check
+			if avgLoss < thresholdLoss {
+				fmt.Printf("Early stopping at iteration %d: Average Loss = %.5f\n", iter, avgLoss)
+				break
+			}
 		}
-	} // end iterations
+	} // End of iterations
 
 	fmt.Printf("Training completed in %v\n", time.Since(startTime))
+}
+
+func (nn *NeuralNetwork) SaveWeights() {
+	// Connect to the database
+	db := db.ConnectDB()
+
+	for layerIndex, layer := range nn.Layers {
+		for neuronIndex, weights := range layer.weights {
+			for weightIndex, weight := range weights {
+				_, err := db.ExecContext(context.Background(),
+					"INSERT INTO nn_schema.nn_weights (layer_index, neuron_index, weight_index, weight) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
+					layerIndex, neuronIndex, weightIndex, weight,
+				)
+				if err != nil {
+					log.Printf("Error saving weight: %v", err)
+				}
+			}
+		}
+	}
+}
+
+func (nn *NeuralNetwork) LoadWeights() {
+	// Connect to the database
+	db := db.ConnectDB()
+
+	// Initialize the database (create table if it doesn't exist).
+	if err := InitDB(db); err != nil {
+		log.Fatal("Error initializing database:", err)
+	}
+
+	rows, err := db.QueryContext(context.Background(), "SELECT layer_index, neuron_index, weight_index, weight FROM nn_schema.nn_weights")
+	if err != nil {
+		log.Fatalf("Error loading weights: %v", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var layerIndex, neuronIndex, weightIndex int
+		var weight float64
+		err := rows.Scan(&layerIndex, &neuronIndex, &weightIndex, &weight)
+		if err != nil {
+			log.Printf("Error scanning row: %v", err)
+			continue
+		}
+		nn.Layers[layerIndex].weights[neuronIndex][weightIndex] = weight
+	}
+}
+
+// InitDB creates the nn_weights table if it doesn't exist.
+func InitDB(db *sql.DB) error {
+	createTableQuery := `
+		CREATE TABLE IF NOT EXISTS nn_schema.nn_weights (
+			id SERIAL PRIMARY KEY,
+			layer_index INT,
+			neuron_index INT,
+			weight_index INT,
+			weight FLOAT8
+		);
+	`
+	_, err := db.Exec(createTableQuery)
+	return err
 }

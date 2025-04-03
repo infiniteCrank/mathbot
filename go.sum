@@ -1,2 +1,4 @@
 github.com/infiniteCrank/gobotai v0.0.0-20250224055740-d1bade9d4796 h1:+Z3u5CPzOTymHkXnZegWUuvS8G4/MpbYq5+g6OS17rI=
 github.com/infiniteCrank/gobotai v0.0.0-20250224055740-d1bade9d4796/go.mod h1:stI3XDQr2Wxh6LOjpm1bhyqJQoENEcgkW8/W2wFmsAE=
+github.com/lib/pq v1.10.9 h1:YXG7RB+JIjhP29X+OtkiDnYaXQwpS4JEWq7dtCCRUEw=
+github.com/lib/pq v1.10.9/go.mod h1:AlVN5x4E4T544tWzH6hKfbfQvm3HdbOxrmggDNAPY9o=

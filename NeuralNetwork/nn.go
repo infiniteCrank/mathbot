@@ -534,3 +534,15 @@ func InitDB(db *sql.DB) error {
 	_, err := db.Exec(createTableQuery)
 	return err
 }
+
+func (nn *NeuralNetwork) DeleteWeights() {
+	// Connect to the database
+	db := db.ConnectDB()
+	defer db.Close() // Ensure the database connection is closed
+
+	_, err := db.ExecContext(context.Background(),
+		"DELETE FROM nn_schema.nn_weights")
+	if err != nil {
+		log.Printf("Error deleting weights: %v", err)
+	}
+}

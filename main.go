@@ -62,8 +62,17 @@ func main() {
 	fmt.Printf("Model accuracy: %.2f%%\n", accuracy)
 
 	fmt.Println("Saving weights...")
-	// Uncomment this line if you have a weight-saving function implemented
-	// nn.SaveWeights()
+	fmt.Printf("Model accuracy: %.2f%%\n", accuracy)
+
+	if accuracy > 50.0 {
+		fmt.Println("Deleting existing weights...")
+		nn.DeleteWeights() // Remove old weights
+		fmt.Println("Saving new weights...")
+		nn.SaveWeights() // Save new weights
+		fmt.Println("Save completed.")
+	} else {
+		fmt.Println("Accuracy is below 50%, not saving weights.")
+	}
 	fmt.Println("Save completed.")
 
 	// Evaluate the network on test data

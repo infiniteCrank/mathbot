@@ -314,13 +314,17 @@ func (nn *NeuralNetwork) PredictRegression(input []float64) []float64 {
 }
 
 // Train trains the neural network using mini-batch gradient descent with Adam optimizer.
-// It logs the average training loss every printEvery iterations.
+// It logs the average training loss every printEvery iterations and implements a patience mechanism for early stopping.
 func (nn *NeuralNetwork) Train(inputs [][]float64, targets [][]float64, iterations int,
 	learningRateDecayFactor float64, decayEpochs int, miniBatchSize int) {
 
 	totalSamples := len(inputs)
-	printEvery := 100      // Adjust as desired
-	thresholdLoss := 0.009 // Early stopping threshold for average loss
+	printEvery := 100 // Adjust as desired
+
+	// Patience mechanism variables:
+	bestLoss := math.MaxFloat64
+	patienceCounter := 0
+	maxPatience := 500 // Number of iterations with no improvement allowed before stopping
 
 	startTime := time.Now()
 	adamTimeStep := 0 // Global counter for Adam updates.
@@ -456,16 +460,23 @@ func (nn *NeuralNetwork) Train(inputs [][]float64, targets [][]float64, iteratio
 					out, _, _ := layer.Forward(current, false)
 					current = out
 				}
-				loss := CalculateMSE([]float64{current[0]}, []float64{targets[b][0]}) // Calculate squared error only
+				// Using MSE as loss measure (for a single output in regression)
+				loss := CalculateMSE([]float64{current[0]}, []float64{targets[b][0]})
 				totalLoss += loss
 				sampleCount++
 			}
 			avgLoss := totalLoss / float64(sampleCount)
 			fmt.Printf("Iteration %d, Average Loss: %v\n", iter, avgLoss)
 
-			// Early stopping check
-			if avgLoss < thresholdLoss {
-				fmt.Printf("Early stopping at iteration %d: Average Loss = %.5f\n", iter, avgLoss)
+			// Patience-based early stopping.
+			if avgLoss < bestLoss {
+				bestLoss = avgLoss
+				patienceCounter = 0
+			} else {
+				patienceCounter++
+			}
+			if patienceCounter >= maxPatience {
+				fmt.Printf("Early stopping at iteration %d: no improvement for %d iterations, best loss: %.5f\n", iter, maxPatience, bestLoss)
 				break
 			}
 		}

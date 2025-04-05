@@ -2,12 +2,10 @@ package main
 
 import (
 	"fmt"
-	"math/rand" // Ensure you import rand for variability in sequence generation
+	"math/rand"
 
 	"github.com/infiniteCrank/mathbot/NeuralNetwork"
 )
-
-const IdentityActivation = 100
 
 func main() {
 	// Increase training range
@@ -24,7 +22,8 @@ func main() {
 			float64(i+1) + rand.Float64()*0.1,
 			float64(i+2) + rand.Float64()*0.1,
 			float64(i+3) + rand.Float64()*0.1,
-			float64(i+4) + rand.Float64()*0.1}
+			float64(i+4) + rand.Float64()*0.1,
+		}
 		trainingInputs = append(trainingInputs, sequence)
 		trainingTargets = append(trainingTargets, []float64{float64(i + 5)})
 	}
@@ -43,47 +42,33 @@ func main() {
 	fmt.Printf("Generated %d training examples.\n", len(trainingInputs))
 
 	// Set initial hyperparameters.
-	learningRate := 3.125e-05 // Increase the learning rate for faster convergence
-	l2Regularization := 3.125e-06
+	learningRate := 0.001 // Increase the learning rate for faster convergence
+	l2Regularization := 0.001
 
-	// Create a neural network with an adjusted architecture
+	// Create a neural network with an adjusted architecture.
+	// Note: Use NeuralNetwork.IdentityActivation (from your package) for regression.
 	nn := NeuralNetwork.NewNeuralNetwork(
-		[]int{5, 25, 10, 1}, // Adjusted layers
-		[]int{NeuralNetwork.LeakyReLUActivation, NeuralNetwork.LeakyReLUActivation, IdentityActivation},
+		[]int{5, 25, 50, 10, 1}, // Adjusted layers
+		[]int{NeuralNetwork.LeakyReLUActivation, NeuralNetwork.LeakyReLUActivation, NeuralNetwork.LeakyReLUActivation, NeuralNetwork.IdentityActivation},
 		learningRate,
 		l2Regularization,
 	)
-	// Load the saved weights if available
+
+	// Load the saved weights if available.
 	fmt.Println("Loading weights...")
 	nn.LoadWeights()
-	fmt.Println("Weights loadedd.")
+	fmt.Println("Weights loaded.")
 
 	fmt.Println("Training started...")
-	nn.Train(trainingInputs, trainingTargets, 20000, 0.9999, 5000, 32) // More training iterations
+	// Train with more iterations. Note: The patience mechanism in Train will handle early stopping.
+	nn.Train(trainingInputs, trainingTargets, 20000, 0.9999, 5000, 32)
 	fmt.Println("Training completed.")
 
-	// Evaluate accuracy after training
-	accuracy := NeuralNetwork.EvaluateAccuracy(nn, trainingInputs, trainingTargets, maxValue*0.05, maxValue)
-	fmt.Printf("Model accuracy: %.2f%%\n", accuracy)
-
-	fmt.Println("Saving weights...")
-	fmt.Printf("Model accuracy: %.2f%%\n", accuracy)
-
-	if accuracy > 40.0 {
-		fmt.Println("Deleting existing weights...")
-		nn.DeleteWeights() // Remove old weights
-		fmt.Println("Saving new weights...")
-		nn.SaveWeights() // Save new weights
-		fmt.Println("Save completed.")
-	} else {
-		fmt.Println("Accuracy is below 50%, not saving weights.")
-	}
-
-	// Evaluate the network on test data
+	// Evaluate the network on test data.
 	var predictions []float64
 	var actuals []float64
 
-	for i := 1001; i <= 1020; i++ { // Test on a small range outside training data
+	for i := 1001; i <= 2020; i++ { // Test on a small range outside training data
 		testInput := []float64{float64(i), float64(i + 1), float64(i + 2), float64(i + 3), float64(i + 4)}
 		for j := range testInput {
 			testInput[j] /= maxValue // Normalize for input
@@ -97,21 +82,33 @@ func main() {
 		actuals = append(actuals, actual)
 	}
 
-	// Compute metrics
+	// Compute regression metrics.
 	mse := NeuralNetwork.CalculateMSE(predictions, actuals)
 	rmse := NeuralNetwork.CalculateRMSE(predictions, actuals)
 	mae := NeuralNetwork.CalculateMAE(predictions, actuals)
 
 	fmt.Printf("Evaluation Metrics:\nMSE: %.6f, RMSE: %.6f, MAE: %.6f\n", mse, rmse, mae)
 
-	// Print sample predictions
+	// Print sample predictions.
 	fmt.Println("Sample Predictions vs Actual Values:")
 	for i := 0; i < min(5, len(predictions)); i++ {
 		fmt.Printf("Predicted: %.4f, Actual: %.4f\n", predictions[i], actuals[i])
 	}
+
+	// Decide whether to save weights based on a regression metric (e.g., RMSE).
+	// Here we save the weights only if the RMSE is below a chosen threshold.
+	rmseThreshold := 50.0
+	if rmse < rmseThreshold {
+		fmt.Println("RMSE is acceptable, saving weights...")
+		nn.DeleteWeights() // Remove old weights
+		nn.SaveWeights()   // Save new weights
+		fmt.Println("Weights saved.")
+	} else {
+		fmt.Println("RMSE is high; not saving weights.")
+	}
 }
 
-// Helper function to get the minimum of two values
+// Helper function to get the minimum of two values.
 func min(a, b int) int {
 	if a < b {
 		return a

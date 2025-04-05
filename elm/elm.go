@@ -1,6 +1,7 @@
-package ELM
+package elm
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"math"
@@ -12,9 +13,9 @@ type ELM struct {
 	InputSize      int
 	HiddenSize     int
 	OutputSize     int
-	InputWeights   [][]float64 // shape: InputSize x HiddenSize (frozen random weights)
-	HiddenBiases   []float64   // length: HiddenSize (frozen random biases)
-	OutputWeights  [][]float64 // shape: HiddenSize x OutputSize (to be solved)
+	InputWeights   [][]float64 // shape: InputSize x HiddenSize
+	HiddenBiases   []float64   // length: HiddenSize
+	OutputWeights  [][]float64 // shape: HiddenSize x OutputSize
 	Activation     int         // 0: Sigmoid, 1: LeakyReLU, 2: Identity
 	Regularization float64     // Ridge regularization parameter (lambda)
 }
@@ -56,7 +57,7 @@ func NewELM(inputSize, hiddenSize, outputSize, activation int, regularization fl
 		elm.HiddenBiases[j] = rand.Float64()
 	}
 
-	// OutputWeights will be computed in training.
+	// Initialize output weights (will be computed in training).
 	elm.OutputWeights = make([][]float64, hiddenSize)
 	for i := 0; i < hiddenSize; i++ {
 		elm.OutputWeights[i] = make([]float64, outputSize)
@@ -223,4 +224,161 @@ func MatrixMultiply(A, B [][]float64) [][]float64 {
 		}
 	}
 	return C
+}
+
+/////////////////////////////
+// Database Saving/Loading //
+/////////////////////////////
+
+// SaveModel saves the current ELM model to the Postgres database.
+// It assumes that the necessary tables (elm, elm_layers, elm_weights) already exist.
+func (elm *ELM) SaveModel(db *sql.DB) error {
+	// Insert metadata into elm table.
+	var elmID int
+	query := `INSERT INTO nn_schema.elm (input_size, hidden_size, output_size, activation, regularization)
+	          VALUES ($1, $2, $3, $4, $5) RETURNING id`
+	err := db.QueryRow(query, elm.InputSize, elm.HiddenSize, elm.OutputSize, elm.Activation, elm.Regularization).Scan(&elmID)
+	if err != nil {
+		return fmt.Errorf("saving elm metadata failed: %v", err)
+	}
+
+	// Helper function: save a layer's weights.
+	// It inserts a new record into elm_layers then saves each weight in elm_weights.
+	saveLayer := func(layerIndex int, matrix [][]float64) error {
+		var layerID int
+		ql := `INSERT INTO nn_schema.elm_layers (elm_id, layer_index) VALUES ($1, $2) RETURNING id`
+		err := db.QueryRow(ql, elmID, layerIndex).Scan(&layerID)
+		if err != nil {
+			return fmt.Errorf("saving elm layer %d failed: %v", layerIndex, err)
+		}
+		// Insert each weight.
+		ins := `INSERT INTO nn_schema.elm_weights (layer_id, row_index, col_index, weight) VALUES ($1, $2, $3, $4)`
+		for i, row := range matrix {
+			for j, w := range row {
+				_, err := db.Exec(ins, layerID, i, j, w)
+				if err != nil {
+					return fmt.Errorf("saving weight at layer %d (%d,%d) failed: %v", layerIndex, i, j, err)
+				}
+			}
+		}
+		return nil
+	}
+
+	// For the hidden layer we want to store two sets:
+	// Layer 0: InputWeights (shape: InputSize x HiddenSize)
+	// Layer 1: HiddenBiases (store as a 1xHiddenSize matrix)
+	// Layer 2: OutputWeights (shape: HiddenSize x OutputSize)
+	if err := saveLayer(0, elm.InputWeights); err != nil {
+		return err
+	}
+	// Convert hidden biases into a single-row matrix.
+	biasMatrix := make([][]float64, 1)
+	biasMatrix[0] = elm.HiddenBiases
+	if err := saveLayer(1, biasMatrix); err != nil {
+		return err
+	}
+	if err := saveLayer(2, elm.OutputWeights); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// LoadModel loads an ELM model from the database given its id.
+func LoadModel(db *sql.DB, elmID int) (*ELM, error) {
+	// First, load the metadata.
+	var inputSize, hiddenSize, outputSize, activation int
+	var regularization float64
+	query := `SELECT input_size, hidden_size, output_size, activation, regularization FROM nn_schema.elm WHERE id = $1`
+	err := db.QueryRow(query, elmID).Scan(&inputSize, &hiddenSize, &outputSize, &activation, &regularization)
+	if err != nil {
+		return nil, fmt.Errorf("loading elm metadata failed: %v", err)
+	}
+
+	elm := &ELM{
+		InputSize:      inputSize,
+		HiddenSize:     hiddenSize,
+		OutputSize:     outputSize,
+		Activation:     activation,
+		Regularization: regularization,
+	}
+
+	// Allocate matrices.
+	elm.InputWeights = make([][]float64, inputSize)
+	for i := 0; i < inputSize; i++ {
+		elm.InputWeights[i] = make([]float64, hiddenSize)
+	}
+	elm.HiddenBiases = make([]float64, hiddenSize)
+	elm.OutputWeights = make([][]float64, hiddenSize)
+	for i := 0; i < hiddenSize; i++ {
+		elm.OutputWeights[i] = make([]float64, outputSize)
+	}
+
+	// Helper function: load a layer given its layer_index.
+	loadLayer := func(layerIndex int) ([][]float64, error) {
+		// Get the layer id.
+		var layerID int
+		queryLayer := `SELECT id FROM nn_schema.elm_layers WHERE elm_id = $1 AND layer_index = $2`
+		err := db.QueryRow(queryLayer, elmID, layerIndex).Scan(&layerID)
+		if err != nil {
+			return nil, fmt.Errorf("loading layer %d id failed: %v", layerIndex, err)
+		}
+		// Determine dimensions.
+		var nrows, ncols int
+		switch layerIndex {
+		case 0:
+			nrows, ncols = inputSize, hiddenSize
+		case 1:
+			nrows, ncols = 1, hiddenSize
+		case 2:
+			nrows, ncols = hiddenSize, outputSize
+		default:
+			return nil, fmt.Errorf("invalid layer index %d", layerIndex)
+		}
+		// Prepare an empty matrix.
+		mat := make([][]float64, nrows)
+		for i := range mat {
+			mat[i] = make([]float64, ncols)
+		}
+		// Query all weights for this layer.
+		queryWeights := `SELECT row_index, col_index, weight FROM nn_schema.elm_weights WHERE layer_id = $1`
+		rows, err := db.Query(queryWeights, layerID)
+		if err != nil {
+			return nil, fmt.Errorf("loading weights for layer %d failed: %v", layerIndex, err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var r, c int
+			var w float64
+			if err := rows.Scan(&r, &c, &w); err != nil {
+				return nil, err
+			}
+			if r < nrows && c < ncols {
+				mat[r][c] = w
+			}
+		}
+		return mat, nil
+	}
+
+	// Load each layer.
+	inW, err := loadLayer(0)
+	if err != nil {
+		return nil, err
+	}
+	elm.InputWeights = inW
+
+	biasMat, err := loadLayer(1)
+	if err != nil {
+		return nil, err
+	}
+	// biases stored as one row.
+	elm.HiddenBiases = biasMat[0]
+
+	outW, err := loadLayer(2)
+	if err != nil {
+		return nil, err
+	}
+	elm.OutputWeights = outW
+
+	return elm, nil
 }

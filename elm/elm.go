@@ -68,8 +68,8 @@ func NewELM(inputSize, hiddenSize, outputSize, activation int, regularization fl
 	return elm
 }
 
-// hiddenLayer computes the activation output for a single input sample.
-func (elm *ELM) hiddenLayer(input []float64) []float64 {
+// HiddenLayer computes the activation output for a single input sample.
+func (elm *ELM) HiddenLayer(input []float64) []float64 {
 	H := make([]float64, elm.HiddenSize)
 	for j := 0; j < elm.HiddenSize; j++ {
 		sum := 0.0
@@ -100,7 +100,7 @@ func (elm *ELM) Train(trainInputs [][]float64, trainTargets [][]float64) {
 	// Compute hidden layer output matrix H (nSamples x HiddenSize)
 	H := make([][]float64, nSamples)
 	for i := 0; i < nSamples; i++ {
-		H[i] = elm.hiddenLayer(trainInputs[i])
+		H[i] = elm.HiddenLayer(trainInputs[i])
 	}
 
 	// Compute H^T * H (HiddenSize x HiddenSize)
@@ -144,7 +144,7 @@ func (elm *ELM) Train(trainInputs [][]float64, trainTargets [][]float64) {
 
 // Predict returns the prediction for a single input sample.
 func (elm *ELM) Predict(input []float64) []float64 {
-	H := elm.hiddenLayer(input)
+	H := elm.HiddenLayer(input)
 	output := make([]float64, elm.OutputSize)
 	for j := 0; j < elm.OutputSize; j++ {
 		sum := 0.0

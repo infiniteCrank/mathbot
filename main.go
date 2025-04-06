@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/infiniteCrank/mathbot/NeuralNetwork"
 	"github.com/infiniteCrank/mathbot/db"
 	"github.com/infiniteCrank/mathbot/elm"
 	_ "github.com/lib/pq"
@@ -114,6 +115,29 @@ func listModels(dbConn *sql.DB) error {
 	return nil
 }
 
+// Function to generate dataset
+func generateDataset(funcType string, samples int) ([][]float64, [][]float64) {
+	inputs := make([][]float64, samples)
+	outputs := make([][]float64, samples)
+
+	for i := 0; i < samples; i++ {
+		x := rand.Float64() * 2 * math.Pi // Range: [0, 2π]
+		inputs[i] = []float64{x}
+
+		var y float64
+		if funcType == "sin" {
+			y = math.Sin(x)
+		} else if funcType == "exp" {
+			y = math.Exp(x)
+		} else {
+			y = 0
+		}
+		outputs[i] = []float64{y}
+	}
+
+	return inputs, outputs
+}
+
 func main() {
 	// Mode flag now supports: addnew, addpredict, countnew, countpredict, list, drop.
 	mode := flag.String("mode", "addnew", "Mode: 'addnew', 'addpredict', 'countnew', 'countpredict', 'list', or 'drop'")
@@ -152,6 +176,40 @@ func main() {
 
 	// Handle remaining modes.
 	switch *mode {
+	case "combineTech":
+
+		// Generate training data for y = sin(x)
+		trainInputs, trainOutputs := generateDataset("sin", 100000)
+
+		// Initialize the ELM model
+		elmModel := elm.NewELM(1, 20, 1, 0, 0.01) // 1 input, 20 hidden neurons, 1 output
+
+		// Train the ELM model
+		elmModel.Train(trainInputs, trainOutputs)
+
+		// Get transformed features from ELM for training the Neural Network
+		transformedFeatures := make([][]float64, len(trainInputs))
+		for i, input := range trainInputs {
+
+			transformedFeatures[i] = elmModel.HiddenLayer(input) // Assuming hiddenLayer returns output of the hidden neurons
+		}
+
+		// Initialize the Neural Network model
+		layerSizes := []int{20, 20, 1} // 20 features from ELM, 20 hidden neurons, 1 output
+		activations := []int{NeuralNetwork.LeakyReLUActivation, NeuralNetwork.IdentityActivation}
+		nnModel := NeuralNetwork.NewNeuralNetwork(layerSizes, activations, 0.00001, 0.01)
+
+		// Train the Neural Network model on transformed features
+		nnModel.Train(transformedFeatures, trainOutputs, 1000, 0.95, 100, 32) // Adjust parameters as needed
+
+		// Test the model
+		testInputs, _ := generateDataset("sin", 100) // Generate new test data
+
+		for _, input := range testInputs {
+			transformed := elmModel.HiddenLayer(input)          // Use ELM to transform new inputs
+			predicted := nnModel.PredictRegression(transformed) // Get prediction from NN
+			fmt.Printf("Input: %.2f, Predicted: %.4f\n", input[0], predicted[0])
+		}
 	case "list":
 		listModels(dbConn)
 	// ------------------ Addition Modes ------------------

@@ -10,12 +10,17 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/infiniteCrank/mathbot/NeuralNetwork"
 	"github.com/infiniteCrank/mathbot/db"
 	"github.com/infiniteCrank/mathbot/elm"
 	_ "github.com/lib/pq"
 )
+
+//////////////////////////
+// Database Table Setup //
+//////////////////////////
 
 // createTables creates the necessary tables in Postgres if they don't already exist.
 func createTables(db *sql.DB) error {
@@ -74,6 +79,10 @@ func dropTables(db *sql.DB) error {
 	return nil
 }
 
+/////////////////////////
+// Utility Functions   //
+/////////////////////////
+
 // parseInput parses a comma-separated list of numbers from a string.
 func parseInput(inputStr string) ([]float64, error) {
 	parts := strings.Split(inputStr, ",")
@@ -115,7 +124,7 @@ func listModels(dbConn *sql.DB) error {
 	return nil
 }
 
-// Function to generate dataset
+// generateDataset is the existing helper for simple math functions.
 func generateDataset(funcType string, samples int) ([][]float64, [][]float64) {
 	inputs := make([][]float64, samples)
 	outputs := make([][]float64, samples)
@@ -138,13 +147,117 @@ func generateDataset(funcType string, samples int) ([][]float64, [][]float64) {
 	return inputs, outputs
 }
 
+//////////////////////////
+// Protein Data Section //
+//////////////////////////
+
+// ProteinSample represents a simple protein with its amino acid sequence and corresponding secondary structure.
+// In the secondary structure string, use letters such as H (helix), E (sheet), and C (coil).
+type ProteinSample struct {
+	Sequence  string
+	Structure string
+}
+
+// aminoAcidMap maps standard amino acids to an index (0 to 19).
+var aminoAcidMap = map[rune]int{
+	'A': 0, 'C': 1, 'D': 2, 'E': 3, 'F': 4,
+	'G': 5, 'H': 6, 'I': 7, 'K': 8, 'L': 9,
+	'M': 10, 'N': 11, 'P': 12, 'Q': 13, 'R': 14,
+	'S': 15, 'T': 16, 'V': 17, 'W': 18, 'Y': 19,
+}
+
+// encodeAminoAcid returns a one-hot vector (length 20) for a given amino acid.
+func encodeAminoAcid(aa rune) []float64 {
+	vec := make([]float64, 20)
+	if idx, ok := aminoAcidMap[aa]; ok {
+		vec[idx] = 1.0
+	}
+	return vec
+}
+
+// encodeWindow encodes a sliding window (of size windowSize) around position pos in sequence.
+// It returns a flattened vector of length windowSize*20. Positions outside the sequence are padded with zeros.
+func encodeWindow(sequence string, pos, windowSize int) []float64 {
+	half := windowSize / 2
+	encoded := make([]float64, 0, windowSize*20)
+	seqRunes := []rune(sequence)
+	seqLen := len(seqRunes)
+	for i := pos - half; i <= pos+half; i++ {
+		if i < 0 || i >= seqLen {
+			// Padding with zero vector.
+			encoded = append(encoded, make([]float64, 20)...)
+		} else {
+			encoded = append(encoded, encodeAminoAcid(seqRunes[i])...)
+		}
+	}
+	return encoded
+}
+
+// structureMap defines one-hot encoding for secondary structure labels.
+var structureMap = map[rune][]float64{
+	'H': {1, 0, 0}, // Helix
+	'E': {0, 1, 0}, // Sheet
+	'C': {0, 0, 1}, // Coil (or other)
+}
+
+// generateProteinDataset processes a small hardcoded dataset into training examples.
+// It uses a sliding window approach to create an input vector from the amino acid sequence
+// and the corresponding one-hot label from the structure string for the center residue.
+func generateProteinDataset(windowSize int) ([][]float64, [][]float64) {
+	// Two small hardcoded protein samples with matching sequence and structure lengths.
+	dataset := []ProteinSample{
+		{
+			Sequence:  "ACDEFGHIKLMNPQRSTVWY", // 20 residues
+			Structure: "HHHHEEEECCCCCHHHHEEE", // 20 characters
+		},
+		{
+			Sequence:  "MKTIIALSYIFCLVFADYKDDDDK", // 24 residues
+			Structure: "CCCCCHHHHCCCCEEEECCCCCCC", // 24 characters (5+4+4+4+7=24)
+		},
+	}
+
+	var inputs [][]float64
+	var outputs [][]float64
+
+	// For each sample, generate examples using a sliding window.
+	for _, sample := range dataset {
+		seqRunes := []rune(sample.Sequence)
+		structRunes := []rune(sample.Structure)
+		seqLen := len(seqRunes)
+		if seqLen != len(structRunes) {
+			fmt.Printf("Warning: sequence and structure lengths do not match for sample %v\n", sample)
+			continue
+		}
+		for pos := 0; pos < seqLen; pos++ {
+			// Create input vector for this position.
+			inputVec := encodeWindow(sample.Sequence, pos, windowSize)
+			// Get the one-hot label for the center residue.
+			centerStructure := structRunes[pos]
+			label, ok := structureMap[centerStructure]
+			if !ok {
+				// If unknown structure letter, default to coil.
+				label = structureMap['C']
+			}
+			inputs = append(inputs, inputVec)
+			outputs = append(outputs, label)
+		}
+	}
+	return inputs, outputs
+}
+
+//////////////////////////
+// Main Function        //
+//////////////////////////
+
 func main() {
-	// Mode flag now supports: addnew, addpredict, countnew, countpredict, list, drop.
-	mode := flag.String("mode", "addnew", "Mode: 'addnew', 'addpredict', 'countnew', 'countpredict', 'list', or 'drop'")
+	rand.Seed(time.Now().UnixNano())
+
+	// Mode flag supports: addnew, addpredict, countnew, countpredict, list, drop, combineTech, protein.
+	mode := flag.String("mode", "addnew", "Mode: 'addnew', 'addpredict', 'countnew', 'countpredict', 'list', 'drop', 'combineTech', or 'protein'")
 	// For loading/predicting, provide the model ID.
 	modelID := flag.Int("id", 0, "ID of the model to load (used with addpredict, countpredict, or list)")
 	// For prediction modes, provide input numbers.
-	inputStr := flag.String("input", "", "Comma-separated list of numbers as input (2 for addpredict, 5 for countpredict)")
+	inputStr := flag.String("input", "", "Comma-separated list of numbers as input")
 	flag.Parse()
 
 	dbConn := db.ConnectDB()
@@ -168,58 +281,81 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Create tables if they do not exist (unless dropping was performed).
+	// Create tables if they do not exist.
 	if err := createTables(dbConn); err != nil {
 		fmt.Printf("Error creating tables: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Handle remaining modes.
 	switch *mode {
 	case "combineTech":
-
-		// Generate training data for y = sin(x)
+		// Existing combineTech mode using ELM+Neural Network for sin(x)
 		trainInputs, trainOutputs := generateDataset("sin", 100000)
-
-		// Initialize the ELM model
 		elmModel := elm.NewELM(1, 20, 1, 0, 0.01) // 1 input, 20 hidden neurons, 1 output
-
-		// Train the ELM model
 		elmModel.Train(trainInputs, trainOutputs)
-
-		// Get transformed features from ELM for training the Neural Network
 		transformedFeatures := make([][]float64, len(trainInputs))
 		for i, input := range trainInputs {
-
-			transformedFeatures[i] = elmModel.HiddenLayer(input) // Assuming hiddenLayer returns output of the hidden neurons
+			transformedFeatures[i] = elmModel.HiddenLayer(input)
 		}
-
-		// Initialize the Neural Network model
 		layerSizes := []int{20, 20, 1} // 20 features from ELM, 20 hidden neurons, 1 output
 		activations := []int{NeuralNetwork.LeakyReLUActivation, NeuralNetwork.IdentityActivation}
 		nnModel := NeuralNetwork.NewNeuralNetwork(layerSizes, activations, 0.00001, 0.01)
-
-		// Train the Neural Network model on transformed features
-		nnModel.Train(transformedFeatures, trainOutputs, 1000, 0.95, 100, 32) // Adjust parameters as needed
-
-		// Test the model
-		testInputs, _ := generateDataset("sin", 100) // Generate new test data
-
+		nnModel.Train(transformedFeatures, trainOutputs, 1000, 0.95, 100, 32)
+		testInputs, _ := generateDataset("sin", 100)
 		for _, input := range testInputs {
-			transformed := elmModel.HiddenLayer(input)          // Use ELM to transform new inputs
-			predicted := nnModel.PredictRegression(transformed) // Get prediction from NN
+			transformed := elmModel.HiddenLayer(input)
+			predicted := nnModel.PredictRegression(transformed)
 			fmt.Printf("Input: %.2f, Predicted: %.4f\n", input[0], predicted[0])
 		}
+
+	case "protein":
+		// Protein structure prediction using ELM.
+		windowSize := 15 // Use an odd number for a centered window.
+		inputs, outputs := generateProteinDataset(windowSize)
+		fmt.Printf("Generated %d protein training examples.\n", len(inputs))
+		// Input size is windowSize * 20 (one-hot per amino acid)
+		inputSize := windowSize * 20
+		hiddenSize := 50 // adjust as needed
+		outputSize := 3  // three secondary structure classes: H, E, C
+		activation := 0  // 0 for sigmoid activation (from your elm code)
+		regularization := 0.01
+		proteinModel := elm.NewELM(inputSize, hiddenSize, outputSize, activation, regularization)
+		proteinModel.ModelType = "protein_structure"
+		fmt.Println("Training protein structure prediction model using ELM...")
+		proteinModel.Train(inputs, outputs)
+		// Evaluate on the training set.
+		correct := 0
+		for i, input := range inputs {
+			pred := proteinModel.Predict(input)
+			// Get predicted class as index of the max value.
+			if argMax(pred) == argMax(outputs[i]) {
+				correct++
+			}
+		}
+		accuracy := float64(correct) / float64(len(inputs)) * 100.0
+		fmt.Printf("Training accuracy: %.2f%%\n", accuracy)
+		// Optionally, save the model if accuracy is acceptable.
+		if accuracy > 70.0 { // adjust threshold as needed
+			fmt.Println("Accuracy acceptable. Saving protein model to database...")
+			if err := proteinModel.SaveModel(dbConn); err != nil {
+				fmt.Printf("Error saving protein model: %v\n", err)
+			} else {
+				fmt.Println("Protein model saved successfully.")
+			}
+		} else {
+			fmt.Println("Accuracy too low. Model not saved.")
+		}
+
 	case "list":
 		listModels(dbConn)
+
 	// ------------------ Addition Modes ------------------
 	case "addnew":
-		// Train a new addition model.
 		numSamples := 1000
 		var trainingInputs [][]float64
 		var trainingTargets [][]float64
-		inputMax := 100.0  // Inputs in [0,100]
-		outputMax := 200.0 // Sum in [0,200]
+		inputMax := 100.0
+		outputMax := 200.0
 		for i := 0; i < numSamples; i++ {
 			a := rand.Float64() * inputMax
 			b := rand.Float64() * inputMax
@@ -259,7 +395,6 @@ func main() {
 		}
 
 	case "addpredict":
-		// Predict addition result.
 		if *modelID <= 0 {
 			fmt.Println("Please provide a valid model ID using -id flag for addition prediction.")
 			os.Exit(1)
@@ -289,7 +424,6 @@ func main() {
 
 	// ------------------ Counting Modes ------------------
 	case "countnew":
-		// Train a new counting model.
 		startNum := 1
 		endNum := 6000
 		var trainingInputs [][]float64
@@ -354,7 +488,6 @@ func main() {
 		}
 
 	case "countpredict":
-		// Predict the next five numbers using a counting model.
 		if *modelID <= 0 {
 			fmt.Println("Please provide a valid model ID using -id flag for counting prediction.")
 			os.Exit(1)
@@ -377,7 +510,6 @@ func main() {
 			fmt.Printf("Error loading counting model: %v\n", err)
 			os.Exit(1)
 		}
-		// Use the same normalization constant as during training.
 		maxValue := float64(6000 + 5)
 		normalizedInput := make([]float64, len(nums))
 		for i, v := range nums {
@@ -393,6 +525,19 @@ func main() {
 		}
 
 	default:
-		fmt.Println("Invalid mode. Use -mode with one of: addnew, addpredict, countnew, countpredict, list, or drop")
+		fmt.Println("Invalid mode. Use -mode with one of: addnew, addpredict, countnew, countpredict, combineTech, protein, list, or drop")
 	}
+}
+
+// argMax returns the index of the maximum value in the slice.
+func argMax(slice []float64) int {
+	maxIdx := 0
+	maxVal := slice[0]
+	for i, v := range slice {
+		if v > maxVal {
+			maxVal = v
+			maxIdx = i
+		}
+	}
+	return maxIdx
 }

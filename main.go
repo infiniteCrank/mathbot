@@ -719,7 +719,7 @@ func main() {
 		rmseCT := math.Sqrt(mseCT)
 		loadedModel.RMSE = rmseCT
 		fmt.Printf("Evaluation RMSE after counting retraining: %.6f\n", rmseCT)
-		if rmseCT < 150.0 {
+		if rmseCT < loadedModel.RMSE {
 			fmt.Println("RMSE acceptable. Saving updated counting model...")
 			if err := loadedModel.SaveModel(dbConn); err != nil {
 				fmt.Printf("Error saving updated counting model: %v\n", err)

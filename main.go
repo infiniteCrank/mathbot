@@ -113,8 +113,7 @@ func listModels(dbConn *sql.DB) error {
 	fmt.Println("Saved Models:")
 	for rows.Next() {
 		var id, inputSize, hiddenSize, outputSize, activation int
-		var regularization float64
-		var rmse float64
+		var regularization, rmse float64
 		var modelType string
 		if err := rows.Scan(&id, &inputSize, &hiddenSize, &outputSize, &activation, &regularization, &modelType, &rmse); err != nil {
 			return fmt.Errorf("error scanning model row: %v", err)
@@ -148,6 +147,7 @@ func generateDataset(funcType string, samples int) ([][]float64, [][]float64) {
 	return inputs, outputs
 }
 
+// generateMixedCountingData generates mixed counting sequences based on various step sizes.
 func generateMixedCountingData(steps []int, samplesPerStep int) ([][]float64, []float64) {
 	inputs := [][]float64{}
 	targets := []float64{}
@@ -171,6 +171,7 @@ func generateMixedCountingData(steps []int, samplesPerStep int) ([][]float64, []
 	return inputs, targets
 }
 
+// reshapeTargetsFlatTo2D reshapes a flat target slice into a 2D slice with the desired output dimension.
 func reshapeTargetsFlatTo2D(flat []float64, outputDim int) ([][]float64, error) {
 	if len(flat)%outputDim != 0 {
 		return nil, fmt.Errorf("cannot reshape: %d values into output dimension %d", len(flat), outputDim)
@@ -188,7 +189,7 @@ func reshapeTargetsFlatTo2D(flat []float64, outputDim int) ([][]float64, error) 
 // Protein Data Section //
 //////////////////////////
 
-// ProteinSample represents a simple protein with its amino acid sequence and corresponding secondary structure.
+// ProteinSample represents a protein sample with its amino acid sequence and corresponding secondary structure.
 type ProteinSample struct {
 	Sequence  string
 	Structure string
@@ -202,7 +203,7 @@ var aminoAcidMap = map[rune]int{
 	'S': 15, 'T': 16, 'V': 17, 'W': 18, 'Y': 19,
 }
 
-// encodeAminoAcid returns a one-hot vector (length 20) for a given amino acid.
+// encodeAminoAcid returns a one-hot vector (length 20) for the provided amino acid.
 func encodeAminoAcid(aa rune) []float64 {
 	vec := make([]float64, 20)
 	if idx, ok := aminoAcidMap[aa]; ok {
@@ -211,8 +212,7 @@ func encodeAminoAcid(aa rune) []float64 {
 	return vec
 }
 
-// encodeWindow encodes a sliding window (of size windowSize) around position pos in sequence.
-// It returns a flattened vector of length windowSize*20. Positions outside the sequence are padded with zeros.
+// encodeWindow creates a flattened vector representing a sliding window of amino acids.
 func encodeWindow(sequence string, pos, windowSize int) []float64 {
 	half := windowSize / 2
 	encoded := make([]float64, 0, windowSize*20)
@@ -220,7 +220,6 @@ func encodeWindow(sequence string, pos, windowSize int) []float64 {
 	seqLen := len(seqRunes)
 	for i := pos - half; i <= pos+half; i++ {
 		if i < 0 || i >= seqLen {
-			// Padding with zero vector.
 			encoded = append(encoded, make([]float64, 20)...)
 		} else {
 			encoded = append(encoded, encodeAminoAcid(seqRunes[i])...)
@@ -233,45 +232,36 @@ func encodeWindow(sequence string, pos, windowSize int) []float64 {
 var structureMap = map[rune][]float64{
 	'H': {1, 0, 0}, // Helix
 	'E': {0, 1, 0}, // Sheet
-	'C': {0, 0, 1}, // Coil (or other)
+	'C': {0, 0, 1}, // Coil or other
 }
 
-// generateProteinDataset processes a small hardcoded dataset into training examples.
-// It uses a sliding window approach to create an input vector from the amino acid sequence
-// and the corresponding one-hot label from the structure string for the center residue.
+// generateProteinDataset creates protein training examples using a sliding window approach.
 func generateProteinDataset(windowSize int) ([][]float64, [][]float64) {
-	// Two small hardcoded protein samples with matching sequence and structure lengths.
 	dataset := []ProteinSample{
 		{
-			Sequence:  "ACDEFGHIKLMNPQRSTVWY", // 20 residues
-			Structure: "HHHHEEEECCCCCHHHHEEE", // 20 characters
+			Sequence:  "ACDEFGHIKLMNPQRSTVWY",
+			Structure: "HHHHEEEECCCCCHHHHEEE",
 		},
 		{
-			Sequence:  "MKTIIALSYIFCLVFADYKDDDDK", // 24 residues
-			Structure: "CCCCCHHHHCCCCEEEECCCCCCC", // 24 characters (5+4+4+4+7=24)
+			Sequence:  "MKTIIALSYIFCLVFADYKDDDDK",
+			Structure: "CCCCCHHHHCCCCEEEECCCCCCC",
 		},
 	}
 
 	var inputs [][]float64
 	var outputs [][]float64
-
-	// For each sample, generate examples using a sliding window.
 	for _, sample := range dataset {
 		seqRunes := []rune(sample.Sequence)
 		structRunes := []rune(sample.Structure)
-		seqLen := len(seqRunes)
-		if seqLen != len(structRunes) {
+		if len(seqRunes) != len(structRunes) {
 			fmt.Printf("Warning: sequence and structure lengths do not match for sample %v\n", sample)
 			continue
 		}
-		for pos := 0; pos < seqLen; pos++ {
-			// Create input vector for this position.
+		for pos := 0; pos < len(seqRunes); pos++ {
 			inputVec := encodeWindow(sample.Sequence, pos, windowSize)
-			// Get the one-hot label for the center residue.
 			centerStructure := structRunes[pos]
 			label, ok := structureMap[centerStructure]
 			if !ok {
-				// If unknown structure letter, default to coil.
 				label = structureMap['C']
 			}
 			inputs = append(inputs, inputVec)
@@ -288,21 +278,19 @@ func generateProteinDataset(windowSize int) ([][]float64, [][]float64) {
 func main() {
 	rand.Seed(time.Now().UnixNano())
 
-	// Mode flag supports: addnew, addpredict, countnew, countpredict, list, drop, combineTech, protein.
-	mode := flag.String("mode", "addnew", "Mode: 'addnew', 'addpredict', 'countnew', 'countpredict', 'list', 'drop', 'combineTech', or 'protein'")
-	// For loading/predicting, provide the model ID.
-	modelID := flag.Int("id", 0, "ID of the model to load (used with addpredict, countpredict, or list)")
-	// For prediction modes, provide input numbers.
-	inputStr := flag.String("input", "", "Comma-separated list of numbers as input")
+	// Supported modes: addnew, addpredict, addTrain, countnew, countpredict, countingTrain, combineTech, protein, list, drop.
+	mode := flag.String("mode", "addnew", "Mode: 'addnew', 'addpredict', 'addTrain', 'countnew', 'countpredict', 'countingTrain', 'combineTech', 'protein', 'list', or 'drop'")
+	modelID := flag.Int("id", 0, "Model ID for load/predict/retrain (used with addpredict, addTrain, countpredict, countingTrain, or list)")
+	inputStr := flag.String("input", "", "Comma-separated list of numbers as input (used in prediction modes)")
 	flag.Parse()
 
 	dbConn := db.ConnectDB()
 	defer dbConn.Close()
 
-	// If mode is "drop", ask for confirmation then drop all tables.
+	// Handle drop mode first.
 	if *mode == "drop" {
 		reader := bufio.NewReader(os.Stdin)
-		fmt.Print("Are you sure you want to drop all elm tables? This action cannot be undone. (y/n): ")
+		fmt.Print("Are you sure you want to drop all elm tables? (y/n): ")
 		answer, _ := reader.ReadString('\n')
 		answer = strings.TrimSpace(strings.ToLower(answer))
 		if answer == "y" || answer == "yes" {
@@ -317,23 +305,23 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Create tables if they do not exist.
+	// Ensure tables exist.
 	if err := createTables(dbConn); err != nil {
 		fmt.Printf("Error creating tables: %v\n", err)
 		os.Exit(1)
 	}
 
 	switch *mode {
+	// ------------------ Existing Modes ------------------
 	case "combineTech":
-		// Existing combineTech mode using ELM+Neural Network for sin(x)
 		trainInputs, trainOutputs := generateDataset("sin", 100000)
-		elmModel := elm.NewELM(1, 20, 1, 0, 0.01) // 1 input, 20 hidden neurons, 1 output
+		elmModel := elm.NewELM(1, 20, 1, 0, 0.01)
 		elmModel.Train(trainInputs, trainOutputs)
 		transformedFeatures := make([][]float64, len(trainInputs))
 		for i, input := range trainInputs {
 			transformedFeatures[i] = elmModel.HiddenLayer(input)
 		}
-		layerSizes := []int{20, 20, 1} // 20 features from ELM, 20 hidden neurons, 1 output
+		layerSizes := []int{20, 20, 1}
 		activations := []int{NeuralNetwork.LeakyReLUActivation, NeuralNetwork.IdentityActivation}
 		nnModel := NeuralNetwork.NewNeuralNetwork(layerSizes, activations, 0.00001, 0.01)
 		nnModel.Train(transformedFeatures, trainOutputs, 1000, 0.95, 100, 32)
@@ -345,34 +333,29 @@ func main() {
 		}
 
 	case "protein":
-		// Protein structure prediction using ELM.
-		windowSize := 15 // Use an odd number for a centered window.
+		windowSize := 15
 		inputs, outputs := generateProteinDataset(windowSize)
 		fmt.Printf("Generated %d protein training examples.\n", len(inputs))
-		// Input size is windowSize * 20 (one-hot per amino acid)
 		inputSize := windowSize * 20
-		hiddenSize := 50 // adjust as needed
-		outputSize := 3  // three secondary structure classes: H, E, C
-		activation := 0  // 0 for sigmoid activation (from your elm code)
+		hiddenSize := 50
+		outputSize := 3
+		activation := 0
 		regularization := 0.01
 		proteinModel := elm.NewELM(inputSize, hiddenSize, outputSize, activation, regularization)
 		proteinModel.ModelType = "protein_structure"
-		fmt.Println("Training protein structure prediction model using ELM...")
+		fmt.Println("Training protein structure prediction model...")
 		proteinModel.Train(inputs, outputs)
-		// Evaluate on the training set.
 		correct := 0
 		for i, input := range inputs {
 			pred := proteinModel.Predict(input)
-			// Get predicted class as index of the max value.
 			if argMax(pred) == argMax(outputs[i]) {
 				correct++
 			}
 		}
 		accuracy := float64(correct) / float64(len(inputs)) * 100.0
 		fmt.Printf("Training accuracy: %.2f%%\n", accuracy)
-		// Optionally, save the model if accuracy is acceptable.
-		if accuracy > 70.0 { // adjust threshold as needed
-			fmt.Println("Accuracy acceptable. Saving protein model to database...")
+		if accuracy > 70.0 {
+			fmt.Println("Accuracy acceptable. Saving protein model...")
 			if err := proteinModel.SaveModel(dbConn); err != nil {
 				fmt.Printf("Error saving protein model: %v\n", err)
 			} else {
@@ -418,11 +401,10 @@ func main() {
 		rmse := math.Sqrt(mseSum / 100)
 		addModel.RMSE = rmse
 		fmt.Printf("Evaluation RMSE for addition: %.6f\n", rmse)
-		rmseThreshold := 5.0
-		if rmse < rmseThreshold {
-			fmt.Println("RMSE acceptable. Saving addition model to database...")
+		if rmse < 5.0 {
+			fmt.Println("RMSE acceptable. Saving addition model...")
 			if err := addModel.SaveModel(dbConn); err != nil {
-				fmt.Printf("Error saving model: %v\n", err)
+				fmt.Printf("Error saving addition model: %v\n", err)
 			} else {
 				fmt.Println("Addition model saved successfully.")
 			}
@@ -432,7 +414,7 @@ func main() {
 
 	case "addpredict":
 		if *modelID <= 0 {
-			fmt.Println("Please provide a valid model ID using -id flag for addition prediction.")
+			fmt.Println("Please provide a valid model ID for addition prediction using -id flag.")
 			os.Exit(1)
 		}
 		if *inputStr == "" {
@@ -458,25 +440,86 @@ func main() {
 		predictedSum := pred[0] * 200.0
 		fmt.Printf("For input %.2f + %.2f, the predicted sum is: %.4f\n", nums[0], nums[1], predictedSum)
 
+	case "addTrain":
+		// New mode for retraining an addition model.
+		if *modelID <= 0 {
+			fmt.Println("Please provide a valid model ID for addition retraining using -id flag.")
+			os.Exit(1)
+		}
+		loadedModel, err := elm.LoadModel(dbConn, *modelID)
+		if err != nil {
+			fmt.Printf("Error loading addition model: %v\n", err)
+			os.Exit(1)
+		}
+		numSamples := 1000
+		var trainingInputs [][]float64
+		var trainingTargets [][]float64
+		inputMax := 100.0
+		outputMax := 200.0
+		// Distribution A: Uniform from 0 to 100.
+		for i := 0; i < numSamples/2; i++ {
+			a := rand.Float64() * inputMax
+			b := rand.Float64() * inputMax
+			trainingInputs = append(trainingInputs, []float64{a / inputMax, b / inputMax})
+			trainingTargets = append(trainingTargets, []float64{(a + b) / outputMax})
+		}
+		// Distribution B: Uniform from 20 to 80.
+		for i := 0; i < numSamples/2; i++ {
+			a := 20 + rand.Float64()*60
+			b := 20 + rand.Float64()*60
+			trainingInputs = append(trainingInputs, []float64{a / inputMax, b / inputMax})
+			trainingTargets = append(trainingTargets, []float64{(a + b) / outputMax})
+		}
+		fmt.Printf("Generated %d new training examples for addition retraining.\n", numSamples)
+		fmt.Println("Retraining addition model with new mixed data...")
+		loadedModel.Train(trainingInputs, trainingTargets)
+		fmt.Println("Retraining completed.")
+		var mseSumAT float64
+		numEval := 100
+		for i := 0; i < numEval; i++ {
+			a := rand.Float64() * inputMax
+			b := rand.Float64() * inputMax
+			testInput := []float64{a / inputMax, b / inputMax}
+			pred := loadedModel.Predict(testInput)
+			predictedSum := pred[0] * outputMax
+			trueSum := a + b
+			diff := predictedSum - trueSum
+			mseSumAT += diff * diff
+		}
+		rmseAT := math.Sqrt(mseSumAT / float64(numEval))
+		loadedModel.RMSE = rmseAT
+		fmt.Printf("Evaluation RMSE after addition retraining: %.6f\n", rmseAT)
+		if rmseAT < 5.0 {
+			fmt.Println("RMSE acceptable. Saving updated addition model...")
+			if err := loadedModel.SaveModel(dbConn); err != nil {
+				fmt.Printf("Error saving updated addition model: %v\n", err)
+			} else {
+				fmt.Println("Updated addition model saved successfully.")
+			}
+		} else {
+			fmt.Println("RMSE too high. Updated addition model not saved.")
+		}
+
 	// ------------------ Counting Modes ------------------
 	case "countnew":
+		// Original counting training mode.
 		startNum := 1
 		endNum := 6000
 		var trainingInputs [][]float64
 		var trainingTargets [][]float64
 		for i := startNum; i <= endNum-5; i++ {
-			sequence := []float64{
-				float64(i) + rand.Float64()*0.1,
-				float64(i+1) + rand.Float64()*0.1,
-				float64(i+2) + rand.Float64()*0.1,
-				float64(i+3) + rand.Float64()*0.1,
-				float64(i+4) + rand.Float64()*0.1,
+			seq := []float64{
+				float64(i),
+				float64(i + 1),
+				float64(i + 2),
+				float64(i + 3),
+				float64(i + 4),
 			}
-			trainingInputs = append(trainingInputs, sequence)
+			trainingInputs = append(trainingInputs, seq)
 			trainingTargets = append(trainingTargets, []float64{float64(i + 5)})
 		}
 		maxValue := float64(endNum + 5)
-		// Normalize sequential counting data.
+		// Normalize sequential data.
 		for i := range trainingInputs {
 			for j := range trainingInputs[i] {
 				trainingInputs[i][j] /= maxValue
@@ -486,52 +529,42 @@ func main() {
 			trainingTargets[i][0] /= maxValue
 		}
 		fmt.Printf("Generated %d training examples for counting.\n", len(trainingInputs))
-
-		// Generate mixed counting data.
-		steps := []int{2, 8, 12, 16, 32, 64, 10}
-		mixedInputs, mixedOutput := generateMixedCountingData(steps, 100)
-		fmt.Printf("Generated %d training examples for counting (mixed data).\n", len(mixedInputs))
-
 		countModel := elm.NewELM(5, 50, 1, 0, 0.001)
 		countModel.ModelType = "counting"
 		fmt.Println("Training new counting model on sequential data...")
 		countModel.Train(trainingInputs, trainingTargets)
 		fmt.Println("Training completed on sequential data.")
 
-		// Process the mixed data: reshape and normalize.
-		reshapedOutput, err := reshapeTargetsFlatTo2D(mixedOutput, 1)
+		// Mixed data generation.
+		steps := []int{2, 8, 12, 16, 32, 64, 10}
+		mixedInputs, mixedOutput := generateMixedCountingData(steps, 100)
+		mixedTargets, err := reshapeTargetsFlatTo2D(mixedOutput, 1)
 		if err != nil {
 			log.Fatal(err)
 		}
-
-		// Debug print before normalization.
-		fmt.Println("First mixed input (before normalization):", mixedInputs[0])
-		fmt.Println("First mixed target (before normalization):", reshapedOutput[0])
-		fmt.Printf("Mixed data samples: %d, Mixed targets samples: %d\n", len(mixedInputs), len(reshapedOutput))
-
-		// Normalize mixed counting data using the same maxValue.
+		// Normalize mixed data.
 		for i := range mixedInputs {
 			for j := range mixedInputs[i] {
 				mixedInputs[i][j] /= maxValue
 			}
 		}
-		for i := range reshapedOutput {
-			reshapedOutput[i][0] /= maxValue
+		for i := range mixedTargets {
+			mixedTargets[i][0] /= maxValue
 		}
-
-		// Debug print after normalization.
-		fmt.Println("First mixed input (after normalization):", mixedInputs[0])
-		fmt.Println("First mixed target (after normalization):", reshapedOutput[0])
-
+		fmt.Printf("Generated %d mixed counting examples.\n", len(mixedInputs))
 		fmt.Println("Training new counting model with mixed data...")
-		countModel.Train(mixedInputs, reshapedOutput)
+		countModel.Train(mixedInputs, mixedTargets)
 		fmt.Println("Training completed on mixed data.")
-
-		// Evaluation on test counting data.
 		var predictions []float64
 		var actuals []float64
 		for i := 1001; i <= 2020; i++ {
-			testInput := []float64{float64(i), float64(i + 1), float64(i + 2), float64(i + 3), float64(i + 4)}
+			testInput := []float64{
+				float64(i),
+				float64(i + 1),
+				float64(i + 2),
+				float64(i + 3),
+				float64(i + 4),
+			}
 			for j := range testInput {
 				testInput[j] /= maxValue
 			}
@@ -549,21 +582,20 @@ func main() {
 		rmse := math.Sqrt(mse)
 		countModel.RMSE = rmse
 		fmt.Printf("Evaluation RMSE for counting: %.6f\n", rmse)
-		rmseThreshold := 150.0
-		if rmse < rmseThreshold {
-			fmt.Println("RMSE acceptable. Saving counting model to database...")
+		if rmse < 0.33 {
+			fmt.Println("RMSE acceptable. Saving counting model...")
 			if err := countModel.SaveModel(dbConn); err != nil {
-				fmt.Printf("Error saving model: %v\n", err)
+				fmt.Printf("Error saving counting model: %v\n", err)
 			} else {
 				fmt.Println("Counting model saved successfully.")
 			}
 		} else {
-			fmt.Println("RMSE too high. Model not saved.")
+			fmt.Println("RMSE too high. Counting model not saved.")
 		}
 
 	case "countpredict":
 		if *modelID <= 0 {
-			fmt.Println("Please provide a valid model ID using -id flag for counting prediction.")
+			fmt.Println("Please provide a valid model ID for counting prediction using -id flag.")
 			os.Exit(1)
 		}
 		if *inputStr == "" {
@@ -598,12 +630,112 @@ func main() {
 			currentInput = append(currentInput[1:], pred[0])
 		}
 
+	// ------------------ New Mode: countingTrain ------------------
+	case "countingTrain":
+		// This mode retrains an existing counting model by merging sequential and mixed data.
+		if *modelID <= 0 {
+			fmt.Println("Please provide a valid model ID for counting retraining using -id flag.")
+			os.Exit(1)
+		}
+		loadedModel, err := elm.LoadModel(dbConn, *modelID)
+		if err != nil {
+			fmt.Printf("Error loading counting model: %v\n", err)
+			os.Exit(1)
+		}
+		// Generate sequential counting data.
+		startNum := 1
+		endNum := 6000
+		var seqInputs [][]float64
+		var seqTargets [][]float64
+		for i := startNum; i <= endNum-5; i++ {
+			seq := []float64{
+				float64(i),
+				float64(i + 1),
+				float64(i + 2),
+				float64(i + 3),
+				float64(i + 4),
+			}
+			seqInputs = append(seqInputs, seq)
+			seqTargets = append(seqTargets, []float64{float64(i + 5)})
+		}
+		maxValue := float64(endNum + 5)
+		// Normalize sequential data.
+		for i := range seqInputs {
+			for j := range seqInputs[i] {
+				seqInputs[i][j] /= maxValue
+			}
+		}
+		for i := range seqTargets {
+			seqTargets[i][0] /= maxValue
+		}
+		// Generate mixed counting data.
+		steps := []int{2, 8, 12, 16, 32, 64, 10}
+		mixedInputs, mixedOut := generateMixedCountingData(steps, 100)
+		mixedTargets, err := reshapeTargetsFlatTo2D(mixedOut, 1)
+		if err != nil {
+			log.Fatal(err)
+		}
+		// Normalize mixed data.
+		for i := range mixedInputs {
+			for j := range mixedInputs[i] {
+				mixedInputs[i][j] /= maxValue
+			}
+		}
+		for i := range mixedTargets {
+			mixedTargets[i][0] /= maxValue
+		}
+		// Combine sequential and mixed data.
+		allInputs := append(seqInputs, mixedInputs...)
+		allTargets := append(seqTargets, mixedTargets...)
+		fmt.Printf("Generated %d total retraining examples for counting.\n", len(allInputs))
+		fmt.Println("Retraining the counting model with new data...")
+		loadedModel.Train(allInputs, allTargets)
+		fmt.Println("Retraining completed.")
+		// Evaluate on test set.
+		var predictions []float64
+		var actuals []float64
+		for i := 1001; i <= 2020; i++ {
+			testInput := []float64{
+				float64(i),
+				float64(i + 1),
+				float64(i + 2),
+				float64(i + 3),
+				float64(i + 4),
+			}
+			for j := range testInput {
+				testInput[j] /= maxValue
+			}
+			pred := loadedModel.Predict(testInput)
+			pred[0] *= maxValue
+			predictions = append(predictions, pred[0])
+			actuals = append(actuals, float64(i+5))
+		}
+		mseCT := 0.0
+		for i := range predictions {
+			diff := predictions[i] - actuals[i]
+			mseCT += diff * diff
+		}
+		mseCT /= float64(len(predictions))
+		rmseCT := math.Sqrt(mseCT)
+		loadedModel.RMSE = rmseCT
+		fmt.Printf("Evaluation RMSE after counting retraining: %.6f\n", rmseCT)
+		if rmseCT < 150.0 {
+			fmt.Println("RMSE acceptable. Saving updated counting model...")
+			if err := loadedModel.SaveModel(dbConn); err != nil {
+				fmt.Printf("Error saving updated counting model: %v\n", err)
+			} else {
+				fmt.Println("Updated counting model saved successfully.")
+			}
+		} else {
+			fmt.Println("RMSE too high. Updated counting model not saved.")
+		}
+
 	default:
-		fmt.Println("Invalid mode. Use -mode with one of: addnew, addpredict, countnew, countpredict, combineTech, protein, list, or drop")
+		fmt.Println("Invalid mode. Use -mode with one of: addnew, addpredict, addTrain, countnew, countpredict, countingTrain, combineTech, protein, list, or drop")
 	}
 }
 
-// argMax returns the index of the maximum value in the slice.
+// argMax returns the index of the maximum value in a slice.
 func argMax(slice []float64) int {
 	maxIdx := 0
 	maxVal := slice[0]

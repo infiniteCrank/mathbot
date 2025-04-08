@@ -20,3 +20,9 @@ This will train a counting model (using 5-number sequences), assign its model ty
 
 ## To drop all tables (and then start fresh):
 ```go run main.go -mode=drop```
+
+## To retrain a counting model
+```go run main.go -mode=countingTrain -id=1```
+
+## To retrain a add model
+```go run main.go -mode=addTrain -id=1```

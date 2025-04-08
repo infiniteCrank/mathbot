@@ -534,26 +534,6 @@ func main() {
 		countModel.Train(trainingInputs, trainingTargets)
 		fmt.Println("Training completed on sequential data.")
 
-		// Mixed data generation.
-		// steps := []int{2, 8, 12, 16, 32, 64, 10}
-		// mixedInputs, mixedOutput := generateMixedCountingData(steps, 100)
-		// mixedTargets, err := reshapeTargetsFlatTo2D(mixedOutput, 1)
-		// if err != nil {
-		// 	log.Fatal(err)
-		// }
-		// Normalize mixed data.
-		// for i := range mixedInputs {
-		// 	for j := range mixedInputs[i] {
-		// 		mixedInputs[i][j] /= maxValue
-		// 	}
-		// }
-		// for i := range mixedTargets {
-		// 	mixedTargets[i][0] /= maxValue
-		// }
-		// fmt.Printf("Generated %d mixed counting examples.\n", len(mixedInputs))
-		// fmt.Println("Training new counting model with mixed data...")
-		// countModel.Train(mixedInputs, mixedTargets)
-		// fmt.Println("Training completed on mixed data.")
 		var predictions []float64
 		var actuals []float64
 		for i := 1001; i <= 2020; i++ {
@@ -667,29 +647,6 @@ func main() {
 		for i := range seqTargets {
 			seqTargets[i][0] /= maxValue
 		}
-		// Generate mixed counting data.
-		// steps := []int{2, 8, 12, 16, 32, 64, 10}
-		// mixedInputs, mixedOut := generateMixedCountingData(steps, 100)
-		// mixedTargets, err := reshapeTargetsFlatTo2D(mixedOut, 1)
-		// if err != nil {
-		// 	log.Fatal(err)
-		// }
-		// Normalize mixed data.
-		// for i := range mixedInputs {
-		// 	for j := range mixedInputs[i] {
-		// 		mixedInputs[i][j] /= maxValue
-		// 	}
-		// }
-		// for i := range mixedTargets {
-		// 	mixedTargets[i][0] /= maxValue
-		// }
-		// Combine sequential and mixed data.
-		// allInputs := append(seqInputs, mixedInputs...)
-		// allTargets := append(seqTargets, mixedTargets...)
-		// fmt.Printf("Generated %d total retraining examples for counting.\n", len(allInputs))
-		// fmt.Println("Retraining the counting model with new data...")
-		// loadedModel.Train(allInputs, allTargets)
-		// fmt.Println("Retraining completed.")
 		// Evaluate on test set.
 		var predictions []float64
 		var actuals []float64

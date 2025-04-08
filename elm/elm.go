@@ -95,6 +95,11 @@ func (elm *ELM) HiddenLayer(input []float64) []float64 {
 // It assumes trainInputs is an nSamples x InputSize matrix and
 // trainTargets is an nSamples x OutputSize matrix.
 func (elm *ELM) Train(trainInputs [][]float64, trainTargets [][]float64) {
+
+	if len(trainInputs) != len(trainTargets) {
+		panic(fmt.Sprintf("Train error: input and target size mismatch (inputs=%d, targets=%d)", len(trainInputs), len(trainTargets)))
+	}
+
 	nSamples := len(trainInputs)
 
 	// Compute hidden layer output matrix H (nSamples x HiddenSize)

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
+	"log"
 	"math"
 	"math/rand"
 	"os"
@@ -147,12 +148,47 @@ func generateDataset(funcType string, samples int) ([][]float64, [][]float64) {
 	return inputs, outputs
 }
 
+func generateMixedCountingData(steps []int, samplesPerStep int) ([][]float64, []float64) {
+	inputs := [][]float64{}
+	targets := []float64{}
+
+	for _, step := range steps {
+		start := 0
+		for j := 0; j < samplesPerStep; j++ {
+			base := start + j*step
+			seq := []float64{
+				float64(base),
+				float64(base + step),
+				float64(base + 2*step),
+				float64(base + 3*step),
+				float64(base + 4*step),
+			}
+			target := float64(base + 5*step)
+			inputs = append(inputs, seq)
+			targets = append(targets, target)
+		}
+	}
+	return inputs, targets
+}
+
+func reshapeTargetsFlatTo2D(flat []float64, outputDim int) ([][]float64, error) {
+	if len(flat)%outputDim != 0 {
+		return nil, fmt.Errorf("cannot reshape: %d values into output dimension %d", len(flat), outputDim)
+	}
+	samples := len(flat) / outputDim
+	result := make([][]float64, samples)
+	for i := 0; i < samples; i++ {
+		start := i * outputDim
+		result[i] = flat[start : start+outputDim]
+	}
+	return result, nil
+}
+
 //////////////////////////
 // Protein Data Section //
 //////////////////////////
 
 // ProteinSample represents a simple protein with its amino acid sequence and corresponding secondary structure.
-// In the secondary structure string, use letters such as H (helix), E (sheet), and C (coil).
 type ProteinSample struct {
 	Sequence  string
 	Structure string
@@ -440,6 +476,7 @@ func main() {
 			trainingTargets = append(trainingTargets, []float64{float64(i + 5)})
 		}
 		maxValue := float64(endNum + 5)
+		// Normalize sequential counting data.
 		for i := range trainingInputs {
 			for j := range trainingInputs[i] {
 				trainingInputs[i][j] /= maxValue
@@ -449,11 +486,48 @@ func main() {
 			trainingTargets[i][0] /= maxValue
 		}
 		fmt.Printf("Generated %d training examples for counting.\n", len(trainingInputs))
+
+		// Generate mixed counting data.
+		steps := []int{2, 8, 12, 16, 32, 64, 10}
+		mixedInputs, mixedOutput := generateMixedCountingData(steps, 100)
+		fmt.Printf("Generated %d training examples for counting (mixed data).\n", len(mixedInputs))
+
 		countModel := elm.NewELM(5, 50, 1, 0, 0.001)
 		countModel.ModelType = "counting"
-		fmt.Println("Training new counting model...")
+		fmt.Println("Training new counting model on sequential data...")
 		countModel.Train(trainingInputs, trainingTargets)
-		fmt.Println("Training completed.")
+		fmt.Println("Training completed on sequential data.")
+
+		// Process the mixed data: reshape and normalize.
+		reshapedOutput, err := reshapeTargetsFlatTo2D(mixedOutput, 1)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		// Debug print before normalization.
+		fmt.Println("First mixed input (before normalization):", mixedInputs[0])
+		fmt.Println("First mixed target (before normalization):", reshapedOutput[0])
+		fmt.Printf("Mixed data samples: %d, Mixed targets samples: %d\n", len(mixedInputs), len(reshapedOutput))
+
+		// Normalize mixed counting data using the same maxValue.
+		for i := range mixedInputs {
+			for j := range mixedInputs[i] {
+				mixedInputs[i][j] /= maxValue
+			}
+		}
+		for i := range reshapedOutput {
+			reshapedOutput[i][0] /= maxValue
+		}
+
+		// Debug print after normalization.
+		fmt.Println("First mixed input (after normalization):", mixedInputs[0])
+		fmt.Println("First mixed target (after normalization):", reshapedOutput[0])
+
+		fmt.Println("Training new counting model with mixed data...")
+		countModel.Train(mixedInputs, reshapedOutput)
+		fmt.Println("Training completed on mixed data.")
+
+		// Evaluation on test counting data.
 		var predictions []float64
 		var actuals []float64
 		for i := 1001; i <= 2020; i++ {

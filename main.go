@@ -281,6 +281,7 @@ func main() {
 	mode := flag.String("mode", "addnew", "Mode: 'addnew', 'addpredict', 'addTrain', 'countnew', 'countpredict', 'countingTrain', 'combineTech', 'protein', 'list', or 'drop'")
 	modelID := flag.Int("id", 0, "Model ID for load/predict/retrain (used with addpredict, addTrain, countpredict, countingTrain, or list)")
 	inputStr := flag.String("input", "", "Comma-separated list of numbers as input (used in prediction modes)")
+	filename := flag.String("filename", "", "Path to the model file for import")
 	flag.Parse()
 
 	dbConn := db.ConnectDB()
@@ -561,7 +562,7 @@ func main() {
 		rmse := math.Sqrt(mse)
 		countModel.RMSE = rmse
 		fmt.Printf("Evaluation RMSE for counting: %.6f\n", rmse)
-		if rmse < 0.33 {
+		if rmse < 1 {
 			fmt.Println("RMSE acceptable. Saving counting model...")
 			if err := countModel.SaveModel(dbConn); err != nil {
 				fmt.Printf("Error saving counting model: %v\n", err)
@@ -684,6 +685,41 @@ func main() {
 			}
 		} else {
 			fmt.Println("RMSE too high. Updated counting model not saved.")
+		}
+	// Add these case sections in the switch statement
+	case "export":
+		if *modelID <= 0 {
+			fmt.Println("Please provide a valid model ID for exporting using -id flag.")
+			os.Exit(1)
+		}
+		loadedModel, err := elm.LoadModel(dbConn, *modelID)
+		if err != nil {
+			fmt.Printf("Error loading model for export: %v\n", err)
+			os.Exit(1)
+		}
+		filename := fmt.Sprintf("model_%d.json", *modelID)
+		if err := loadedModel.ExportToFile(filename); err != nil {
+			fmt.Printf("Error exporting model to file: %v\n", err)
+		} else {
+			fmt.Printf("Model exported successfully to %s\n", filename)
+		}
+
+	case "import":
+		if *filename == "" {
+			fmt.Println("Please provide the path to the model file using -filename flag.")
+			os.Exit(1)
+		}
+		importedModel, err := elm.ImportModelFromFile(*filename)
+		if err != nil {
+			fmt.Printf("Error importing model from file: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Model imported successfully.")
+
+		if err := importedModel.SaveModel(dbConn); err != nil {
+			fmt.Printf("Error saving imported model to database: %v\n", err)
+		} else {
+			fmt.Println("Model saved to database successfully.")
 		}
 
 	default:

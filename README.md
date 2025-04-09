@@ -26,3 +26,9 @@ This will train a counting model (using 5-number sequences), assign its model ty
 
 ## To retrain a add model
 ```go run main.go -mode=addTrain -id=1```
+
+## To export a model from the database to a JSON file, you would use the command line as follows:
+```go run main.go -mode=export -id=1```
+
+## To import a model from a JSON file back into your application and optionally save it in the database, use the following command
+```go run main.go -mode=import -filename=model_1.json```

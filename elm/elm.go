@@ -2,10 +2,12 @@ package elm
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"math/rand"
+	"os"
 )
 
 // ELM represents a simple Extreme Learning Machine.
@@ -390,4 +392,28 @@ func LoadModel(db *sql.DB, elmID int) (*ELM, error) {
 	elmModel.OutputWeights = outW
 
 	return elmModel, nil
+}
+
+// ExportToFile exports the model to a JSON file.
+func (elm *ELM) ExportToFile(filename string) error {
+	// Convert the ELM model structure to JSON (or your preferred format)
+	data, err := json.Marshal(elm)
+	if err != nil {
+		return fmt.Errorf("error marshaling model to JSON: %v", err)
+	}
+	return os.WriteFile(filename, data, 0644) // Write JSON to the file
+}
+
+// ImportModelFromFile imports a model from a JSON file.
+func ImportModelFromFile(filename string) (*ELM, error) {
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, fmt.Errorf("error reading file: %v", err)
+	}
+
+	elm := &ELM{}
+	if err := json.Unmarshal(data, elm); err != nil {
+		return nil, fmt.Errorf("error unmarshaling JSON to model: %v", err)
+	}
+	return elm, nil
 }

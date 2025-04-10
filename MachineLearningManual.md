@@ -202,13 +202,14 @@ y = \beta_0 + \beta_1 x_1 + \beta_2 x_2 + \ldots + \beta_n x_n
 
 #### Mathematical Derivation  
 Using Ordinary Least Squares (OLS), the objective is to minimize the cost function:
-\[
+$`\[
 J(\beta) = \sum_{i=1}^{m} \left( y_i - \beta_0 - \sum_{j=1}^{n} \beta_j x_{ij} \right)^2.
-\]
+\]`$
+
 Setting the partial derivatives with respect to each \( \beta_j \) to zero leads to the normal equations. In matrix notation:
-\[
+$`\[
 \hat{\beta} = \left(X^T X\right)^{-1} X^T y.
-\]
+\]`$
 
 #### Go Code Example: Linear Regression
 Below is a simplified example using the [Gonum](https://gonum.org/) library for matrix operations.
@@ -283,23 +284,23 @@ Logistic regression is used for binary classification by modeling the probabilit
 - Customer churn prediction.
 
 #### Model Equation  
-\[
+$`\[
 P(y=1 \mid x) = \frac{1}{1 + e^{-(\beta_0 + \beta_1 x_1 + \ldots + \beta_n x_n)}}
-\]
+\]`$
 Taking the logarithm of the odds (logit) gives:
-\[
+$`\[
 \log \left(\frac{P(y=1 \mid x)}{1 - P(y=1 \mid x)}\right) = \beta_0 + \beta_1 x_1 + \cdots + \beta_n x_n.
-\]
+\]`$
 
 #### Optimization Method  
 Coefficients are estimated using Maximum Likelihood Estimation (MLE). For \( m \) samples, the likelihood is:
-\[
+$`\[
 L(\beta) = \prod_{i=1}^{m} P(y_i \mid x_i)^{y_i} \left(1-P(y_i \mid x_i)\right)^{(1-y_i)},
-\]
+\]`$
 and its logarithm is maximized:
-\[
+$`\[
 \ell(\beta) = \sum_{i=1}^{m} \left[ y_i \log(P(y_i \mid x_i)) + (1-y_i) \log(1-P(y_i \mid x_i)) \right].
-\]
+\]`$
 Optimization is typically performed with gradient ascent or by minimizing the negative log-likelihood using gradient descent.
 
 #### Go Code Example: Logistic Regression (Simplified)
@@ -377,16 +378,16 @@ Decision trees partition the data into regions defined by simple decision rules.
 
 #### Mathematical Foundation  
 - **Entropy:**  
-  \[
+  `$\[
   H(T) = -\sum_{c} p(c) \log_2 p(c),
-  \]
-  where \( p(c) \) is the probability of class \( c \).
+  \]`$
+  where $`\( p(c) \)`$ is the probability of class $`\( c \).`$
 
 - **Information Gain:**  
-  \[
+  $`\[
   IG(T, A) = H(T) - \sum_{v \in \text{Values}(A)} \frac{|T_v|}{|T|} H(T_v),
-  \]
-  where \( T_v \) is the subset of data for which feature \( A \) takes value \( v \).
+  \]`$
+  where $`\( T_v \)`$ is the subset of data for which feature $`\( A \)`$ takes value $`\( v \)`$.
 
 #### Process  
 At each node, choose the feature and corresponding split that maximizes information gain (or minimizes impurity) and recursively repeat until termination criteria are met (e.g., maximum depth).
@@ -491,32 +492,32 @@ SVMs aim to find the hyperplane that best separates data points of different cla
 - Bioinformatics (e.g., gene classification).
 
 #### Decision Function  
-\[
+$` \[
 f(x) = w \cdot x + b,
-\]
+\]`$
 where \( w \) is the weight vector and \( b \) is the bias.
 
 #### Optimization  
 - **Hard Margin (Linearly Separable Data):**
-  \[
+  $` \[
   \min_{w,b} \; \frac{1}{2} \|w\|^2 \quad \text{subject to} \quad y_i (w \cdot x_i + b) \geq 1 \quad \forall i.
-  \]
+  \]`$
 - **Soft Margin (Non-Separable Data):**  
   Introduce slack variables \( \xi_i \) such that:
-  \[
+  $` \[
   y_i (w \cdot x_i + b) \geq 1 - \xi_i, \quad \xi_i \geq 0,
-  \]
+  \]`$
   and minimize:
-  \[
+  $` \[
   \frac{1}{2} \|w\|^2 + C \sum_{i=1}^{m} \xi_i,
-  \]
+  \]`$
   where \( C \) is a regularization parameter.
 
 - **Dual Formulation:**  
   Using Lagrange multipliers, the dual problem is:
-  \[
+  $` \[
   \max_{\alpha} \; \sum_{i=1}^{m} \alpha_i - \frac{1}{2} \sum_{i,j=1}^{m} \alpha_i \alpha_j y_i y_j (x_i \cdot x_j),
-  \]
+  \]`$
   subject to \( \sum_{i=1}^{m} \alpha_i y_i = 0 \) and \( \alpha_i \geq 0 \). Kernel methods allow handling non-linear decision boundaries.
 
 #### Go Code Example: SVM (Pseudocode)
@@ -612,12 +613,12 @@ Neural networks consist of layers of interconnected neurons that process data us
 
 #### Forward Propagation  
 At each layer \( l \):
-\[
+$` \[
 z^{(l)} = W^{(l)} a^{(l-1)} + b^{(l)},
-\]
-\[
+\]`$
+$` \[
 a^{(l)} = \sigma(z^{(l)}),
-\]
+\]`$
 where:
 - \( a^{(l-1)} \) is the activation from the previous layer.
 - \( W^{(l)} \) and \( b^{(l)} \) are the weights and biases.
@@ -625,19 +626,19 @@ where:
 
 #### Loss Functions  
 - **Classification (Cross-Entropy Loss):**
-  \[
+  $` \[
   L(y,\hat{y}) = -\sum_{i} y_i \log(\hat{y}_i).
-  \]
+  \]`$
 - **Regression (Mean Squared Error):**
-  \[
+  $` \[
   L(y,\hat{y}) = \frac{1}{2} \sum_{i} \left(y_i - \hat{y}_i\right)^2.
-  \]
+  \]`$
 
 #### Optimization: Backpropagation  
 Gradients of the loss function with respect to the network parameters are computed using the chain rule. The parameters are updated via:
-\[
+$` \[
 W^{(l)} \leftarrow W^{(l)} - \eta \frac{\partial L}{\partial W^{(l)}},
-\]
+\]`$
 where \( \eta \) is the learning rate.
 
 #### Go Code Example: Neural Network with Gorgonia
@@ -745,9 +746,9 @@ Partition the data into \( k \) clusters by minimizing the variance within each 
 - Image compression by reducing colors.
 
 #### Cost Function  
-\[
+$` \[
 J = \sum_{i=1}^{k} \sum_{j=1}^{n_i} \|x_j^{(i)} - \mu_i\|^2,
-\]
+\]`$
 where:
 - \( \mu_i \) is the centroid of cluster \( i \).
 - \( x_j^{(i)} \) denotes each data point in cluster \( i \).
@@ -773,27 +774,27 @@ Build a dendrogram (tree of clusters) representing nested groupings of data poin
 
 #### Distance Metrics  
 - **Euclidean Distance:**
-  \[
+  $` \[
   d(x,y) = \sqrt{\sum_{i} (x_i - y_i)^2}
-  \]
+  \]`$
 - **Manhattan Distance:**
-  \[
+  $` \[
   d(x,y) = \sum_{i} |x_i - y_i|
-  \]
+  \]`$
 
 #### Linkage Criteria  
 - **Single Linkage:**  
-  \[
+  $` \[
   d(A,B) = \min_{a \in A, \, b \in B} \|a-b\|
-  \]
+  \]`$
 - **Complete Linkage:**  
-  \[
+  $` \[
   d(A,B) = \max_{a \in A, \, b \in B} \|a-b\|
-  \]
+  \]`$
 - **Average Linkage:**  
-  \[
+  $` \[
   d(A,B) = \frac{1}{|A||B|}\sum_{a \in A} \sum_{b \in B} \|a-b\|
-  \]
+  \]`$
 
 #### Process  
 Start with each data point as its own cluster, merge the two closest clusters based on the chosen linkage criterion, and continue until one cluster remains.
@@ -963,21 +964,21 @@ Reduce high-dimensional data to a lower-dimensional subspace while retaining mos
 #### Steps Involved  
 1. **Standardization:** Center (and optionally scale) the data.
 2. **Covariance Matrix Calculation:**  
-   \[
+   $` \[
    \text{Cov}(X) = \frac{1}{n-1} X^T X,
-   \]
+   \]`$
    where \( X \) is the data matrix.
 3. **Eigen Decomposition:**  
    Solve the equation:
-   \[
+   $` \[
    \text{Cov}(X) v = \lambda v,
-   \]
+   \]`$
    to find eigenvalues \( \lambda \) and eigenvectors \( v \).
 4. **Projection:**  
    Select the top \( k \) eigenvectors to form the projection matrix \( W \) and transform the data:
-   \[
+   $` \[
    Z = XW.
-   \]
+   \]`$
 
 
 #### Go Code Example: PCA Using Gonum
@@ -1063,13 +1064,13 @@ Semi-supervised learning methods combine a small amount of labeled data with a l
 One common approach is to use graph-based methods:
 - **Graph-Based Methods:**  
   Construct a similarity graph \( G \) where nodes represent data points and edges encode similarity using a kernel such as:
-  \[
+  $` \[
   w_{ij} = \exp\left(-\frac{\|x_i - x_j\|^2}{2\sigma^2}\right).
-  \]
+  \]`$
   Then optimize an objective function:
-  \[
+  $` \[
   \min_f \sum_{(i,j) \in E} w_{ij} \big(f(x_i) - f(x_j)\big)^2 + \lambda \sum_{i \in L} \big(f(x_i) - y_i\big)^2,
-  \]
+  \]`$
   where \( L \) is the set of labeled data and \( \lambda \) is a regularization parameter.
 - Other approaches include self-training and co-training, where confident predictions on unlabeled data are used to refine model training iteratively.
 
@@ -1170,9 +1171,9 @@ Reinforcement learning focuses on training an agent to make sequences of decisio
 Estimate the action-value function \( Q(s, a) \) that predicts the expected cumulative reward for taking action \( a \) in state \( s \).
 
 #### Update Rule  
-\[
+$` \[
 Q(s, a) \leftarrow (1 - \alpha) Q(s, a) + \alpha \Big( r + \gamma \max_{a'} Q(s', a') \Big),
-\]
+\]`$
 where:
 - \( \alpha \) is the learning rate,
 - \( s' \) is the next state,
@@ -1264,9 +1265,9 @@ Train multiple instances of a base model on bootstrapped subsets of the data and
 
 #### Mathematical Expression (Regression)  
 For \( f_m(x) \) as the prediction from the \( m \)th model among \( M \) models:
-\[
+$` \[
 \hat{y}(x) = \frac{1}{M} \sum_{m=1}^{M} f_m(x).
-\]
+\]`$
 
 #### Go Code Example: Bagging (Pseudocode)
 This pseudocode demonstrates training several models and averaging their predictions.
@@ -1316,19 +1317,19 @@ Sequentially train models so that each new model focuses on the examples that pr
 
 #### AdaBoost (Adaptive Boosting)  
 - Compute the weight \( \alpha_t \) from the error \( \epsilon_t \) of the weak learner \( f_t(x) \):
-  \[
+  $` \[
   \alpha_t = \frac{1}{2} \ln\left(\frac{1-\epsilon_t}{\epsilon_t}\right).
-  \]
+  \]`$
 - The final prediction is given by:
-  \[
+  $` \[
   \hat{y}(x) = \sum_{t=1}^{T} \alpha_t f_t(x).
-  \]
+  \]`$
 
 #### Gradient Boosting  
 Minimizes a loss function iteratively:
-\[
+$` \[
 F_m(x) = F_{m-1}(x) + \gamma_m h_m(x),
-\]
+\]`$
 where \( h_m(x) \) is a model fitted to the gradient of the loss function with respect to \( F_{m-1}(x) \), and \( \gamma_m \) is the step size found through optimization.
 
 #### Go Code Example: Boosting (AdaBoost Pseudocode)

@@ -110,15 +110,15 @@ After classifying the problem, consider the following criteria to select the mos
         - #### Definition:
             A log-linear relationship occurs when the logarithm of the dependent variable (or an independent variable) is linearly related to the independent variable(s). This can be represented mathematically as:
 
-            [
+            $`[
             \log(Y) = \beta_0 + \beta_1 X + \epsilon 
-            ]
+            ]`$
 
             Alternatively, when the dependent variable is expressed as a function of an exponential growth model, it can be shown as:
 
-            [
+            $`[
             Y = e^{(\beta_0 + \beta_1 X + \epsilon )}
-            ]
+            ]`$
 
         #### Characteristics:
 
@@ -186,11 +186,11 @@ Linear regression estimates a linear relationship between independent variables 
 - Resource consumption predictions.
 
 #### Equation  
-\[
+$`\[
 y = \beta_0 + \beta_1 x_1 + \beta_2 x_2 + \ldots + \beta_n x_n
-\]
-- \( \beta_0 \) is the intercept.
-- \( \beta_1, \dots, \beta_n \) are the coefficients.
+\]`$
+- \( $`\beta_0 \`$) is the intercept.
+- \( $`\beta_1, \dots, \beta_n \`$) are the coefficients.
 
 #### Mathematical Derivation  
 Using Ordinary Least Squares (OLS), the objective is to minimize the cost function:

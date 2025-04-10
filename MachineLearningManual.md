@@ -124,9 +124,11 @@ After classifying the problem, consider the following criteria to select the mos
             ]`$
 
 	or simplified
+
 	$`[
             \log(Y) = MX + B 
             ]`$
+    
         #### Characteristics:
 
         The relationship between (X) and (Y) is exponential rather than arithmetic; small changes in (X) can result in significant changes in (Y).

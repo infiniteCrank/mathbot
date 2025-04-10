@@ -96,6 +96,9 @@ After classifying the problem, consider the following criteria to select the mos
             - ($`\beta_0`$) is the intercept (the value of (Y) when (X=0)).
             - ($`\beta_1`$) is the slope (the change in (Y) for one unit change in (X)).
             - ($`\epsilon`$) is the error term (captures the discrepancy between the predicted and actual values).
+         
+        or simplified $`Y = MX + B`$
+      
         #### Characteristics:
 
         The graph of a linear relationship is represented by a straight line.

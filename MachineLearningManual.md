@@ -87,9 +87,7 @@ After classifying the problem, consider the following criteria to select the mos
         - #### Definition:
             A linear relationship between an independent variable (X) and a dependent variable (Y) signifies that the change in (Y) can be described as a constant multiple of (X). This relationship can be represented mathematically in the form:
 
-            [
-            Y = \ beta_0 + \ beta_1 X + \ epsilon 
-            ]
+            $[Y = \beta_0 + \beta_1 X + \epsilon ]
 
             Where:
 

@@ -5,16 +5,18 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
+	"log"
 	"math"
 	"math/rand"
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/infiniteCrank/mathbot/NeuralNetwork"
+	qaelm "github.com/infiniteCrank/mathbot/agent"
 	"github.com/infiniteCrank/mathbot/db"
 	"github.com/infiniteCrank/mathbot/elm"
+	"github.com/infiniteCrank/mathbot/fileLoader"
 	_ "github.com/lib/pq"
 )
 
@@ -275,7 +277,6 @@ func generateProteinDataset(windowSize int) ([][]float64, [][]float64) {
 //////////////////////////
 
 func main() {
-	rand.Seed(time.Now().UnixNano())
 
 	// Supported modes: addnew, addpredict, addTrain, countnew, countpredict, countingTrain, combineTech, protein, list, drop.
 	mode := flag.String("mode", "addnew", "Mode: 'addnew', 'addpredict', 'addTrain', 'countnew', 'countpredict', 'countingTrain', 'combineTech', 'protein', 'list', or 'drop'")
@@ -312,7 +313,6 @@ func main() {
 	}
 
 	switch *mode {
-	// ------------------ Existing Modes ------------------
 	case "combineTech":
 		trainInputs, trainOutputs := generateDataset("sin", 100000)
 		elmModel := elm.NewELM(1, 20, 1, 0, 0.01)
@@ -610,7 +610,6 @@ func main() {
 			currentInput = append(currentInput[1:], pred[0])
 		}
 
-	// ------------------ New Mode: countingTrain ------------------
 	case "countingTrain":
 		// This mode retrains an existing counting model by merging sequential and mixed data.
 		if *modelID <= 0 {
@@ -686,7 +685,6 @@ func main() {
 		} else {
 			fmt.Println("RMSE too high. Updated counting model not saved.")
 		}
-	// Add these case sections in the switch statement
 	case "export":
 		if *modelID <= 0 {
 			fmt.Println("Please provide a valid model ID for exporting using -id flag.")
@@ -721,7 +719,58 @@ func main() {
 		} else {
 			fmt.Println("Model saved to database successfully.")
 		}
+	case "agent":
+		// Step 1: Load Markdown documents
+		docs, err := fileLoader.LoadMarkdownFiles("corpus")
+		if err != nil {
+			log.Fatalf("Failed to load markdown files: %v", err)
+		}
+		if len(docs) == 0 {
+			log.Fatalf("No markdown files found in 'corpus' directory")
+		}
+		fmt.Printf("Loaded %d markdown files\n", len(docs))
 
+		// Step 2: Parse Q/A pairs
+
+		qas := qaelm.ParseMarkdownQA(docs)
+		if len(qas) == 0 {
+			log.Fatalf("No Q/A pairs found in markdown corpus. Ensure questions are marked with '## Q:' headings.")
+		}
+		fmt.Printf("Extracted %d Q/A pairs\n", len(qas))
+
+		// Step 3: Train QA ELM agent
+		hiddenSize := 32 // adjust as needed
+		activation := 0  // 0: Sigmoid, 1: LeakyReLU, 2: Identity
+		regularization := 0.001
+		agent, err := qaelm.NewQAELMAgent(qas, hiddenSize, activation, regularization)
+		if err != nil {
+			log.Fatalf("Failed to initialize QA ELM agent: %v", err)
+		}
+		fmt.Println("ELM QA agent trained successfully.")
+
+		// Step 4: Interactive loop
+		scanner := bufio.NewScanner(os.Stdin)
+		fmt.Println("Enter your question (or 'exit' to quit):")
+		for {
+			fmt.Print("> ")
+			if !scanner.Scan() {
+				break
+			}
+			question := scanner.Text()
+			if question == "exit" || question == "quit" {
+				fmt.Println("Goodbye!")
+				break
+			}
+			answer, err := agent.Ask(question)
+			if err != nil {
+				fmt.Printf("Error answering question: %v\n", err)
+			} else {
+				fmt.Printf("Answer: %s\n", answer)
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			log.Fatalf("Error reading input: %v", err)
+		}
 	default:
 		fmt.Println("Invalid mode. Use -mode with one of: addnew, addpredict, addTrain, countnew, countpredict, countingTrain, combineTech, protein, list, or drop")
 	}

@@ -313,8 +313,20 @@ func (nn *NeuralNetwork) PredictRegression(input []float64) []float64 {
 	return currentOutput
 }
 
+// Simple clip function to cap the gradient value (optional fix).
+func clip(x float64, threshold float64) float64 {
+	if math.Abs(x) > threshold {
+		if x > 0 {
+			return threshold
+		}
+		return -threshold
+	}
+	return x
+}
+
 // Train trains the neural network using mini-batch gradient descent with Adam optimizer.
 // It logs the average training loss every printEvery iterations and implements a patience mechanism for early stopping.
+// Updated Train trains the network using mini-batch gradient descent with Adam.
 func (nn *NeuralNetwork) Train(inputs [][]float64, targets [][]float64, iterations int,
 	learningRateDecayFactor float64, decayEpochs int, miniBatchSize int) {
 
@@ -324,10 +336,13 @@ func (nn *NeuralNetwork) Train(inputs [][]float64, targets [][]float64, iteratio
 	// Patience mechanism variables:
 	bestLoss := math.MaxFloat64
 	patienceCounter := 0
-	maxPatience := 500 // Number of iterations with no improvement allowed before stopping
+	maxPatience := 500 // Number of iterations with no improvement allowed
 
 	startTime := time.Now()
-	adamTimeStep := 0 // Global counter for Adam updates.
+	adamTimeStep := 0 // Global counter for Adam updates
+
+	// Global training iteration counter (if you wish to log overall progress)
+	globalIteration := 0
 
 	for iter := 0; iter < iterations; iter++ {
 		// Decay the learning rate periodically.
@@ -345,15 +360,13 @@ func (nn *NeuralNetwork) Train(inputs [][]float64, targets [][]float64, iteratio
 			batchTargets := targets[start:end]
 			batchSize := len(batchInputs)
 
-			// Forward pass through all layers.
+			// Forward pass: propagate the mini-batch through all layers.
 			outputs := make([][][]float64, len(nn.Layers)+1)
 			outputs[0] = batchInputs
-
 			for k := 1; k <= len(nn.Layers); k++ {
 				out, _, _ := nn.Layers[k-1].ForwardBatch(outputs[k-1], true)
 				outputs[k] = out
 			}
-
 			finalOutputs := outputs[len(nn.Layers)] // shape: batchSize x outputDimension
 
 			// Compute error for the output layer.
@@ -362,15 +375,17 @@ func (nn *NeuralNetwork) Train(inputs [][]float64, targets [][]float64, iteratio
 			for b := 0; b < batchSize; b++ {
 				errVec := make([]float64, len(finalOutputs[b]))
 				for j := 0; j < len(finalOutputs[b]); j++ {
+					// FIX: Compute the error over every output element.
 					errVec[j] = batchTargets[b][j] - finalOutputs[b][j]
 				}
 				errors[len(nn.Layers)-1][b] = errVec
 			}
 
-			// Increment global Adam time step.
+			// Increment the global Adam timestep counter.
 			adamTimeStep++
+			globalIteration++
 
-			// Backward pass: loop from last layer to first.
+			// Backward pass: loop from the last layer to the first.
 			for l := len(nn.Layers) - 1; l >= 0; l-- {
 				for j := 0; j < nn.Layers[l].outputs; j++ {
 					gradientSum := 0.0
@@ -393,6 +408,7 @@ func (nn *NeuralNetwork) Train(inputs [][]float64, targets [][]float64, iteratio
 						gradientSum += errors[l][b][j] * grad
 					}
 					avgGradient := gradientSum / float64(batchSize)
+
 					// Update weights for neuron j using Adam.
 					for i := 0; i < nn.Layers[l].inputs; i++ {
 						deltaSum := 0.0
@@ -400,6 +416,9 @@ func (nn *NeuralNetwork) Train(inputs [][]float64, targets [][]float64, iteratio
 							deltaSum += avgGradient * outputs[l][b][i]
 						}
 						avgDelta := deltaSum / float64(batchSize)
+
+						// Optional: Apply gradient clipping to avoid explosion.
+						avgDelta = clip(avgDelta, 1.0)
 
 						// Adam update for weight.
 						m := beta1*nn.Layers[l].weightM[i][j] + (1-beta1)*avgDelta
@@ -409,7 +428,6 @@ func (nn *NeuralNetwork) Train(inputs [][]float64, targets [][]float64, iteratio
 						weightUpdate := nn.learningRate * mHat / (math.Sqrt(vHat) + epsilon)
 
 						nn.Layers[l].weights[i][j] += weightUpdate
-
 						// Apply L2 regularization.
 						nn.Layers[l].weights[i][j] -= nn.l2Regularization * nn.learningRate * nn.Layers[l].weights[i][j]
 
@@ -425,13 +443,12 @@ func (nn *NeuralNetwork) Train(inputs [][]float64, targets [][]float64, iteratio
 					vHatBias := vBias / (1 - math.Pow(beta2, float64(adamTimeStep)))
 					biasUpdate := nn.learningRate * mHatBias / (math.Sqrt(vHatBias) + epsilon)
 					nn.Layers[l].biases[j] += biasUpdate
-
 					// Save updated bias moments.
 					nn.Layers[l].biasM[j] = mBias
 					nn.Layers[l].biasV[j] = vBias
 				}
 
-				// Propagate errors to the previous layer.
+				// Propagate errors to the previous layer if there is one.
 				if l > 0 {
 					errors[l-1] = make([][]float64, batchSize)
 					for b := 0; b < batchSize; b++ {
@@ -446,29 +463,25 @@ func (nn *NeuralNetwork) Train(inputs [][]float64, targets [][]float64, iteratio
 						errors[l-1][b] = prevErr
 					}
 				}
-			} // End of backward pass
-		} // End of mini-batch processing
+			} // End backward pass.
+		} // End mini-batch processing.
 
-		// Calculate average loss over the entire training set every printEvery iterations.
+		// Log average loss every printEvery iterations.
 		if iter%printEvery == 0 {
 			totalLoss := 0.0
-			sampleCount := 0
-			// Compute loss over entire training set.
 			for b := 0; b < totalSamples; b++ {
 				current := inputs[b]
 				for _, layer := range nn.Layers {
 					out, _, _ := layer.Forward(current, false)
 					current = out
 				}
-				// Using MSE as loss measure (for a single output in regression)
-				loss := CalculateMSE([]float64{current[0]}, []float64{targets[b][0]})
+				// FIX: Compute the loss over the full output vector.
+				loss := CalculateMSE(current, targets[b])
 				totalLoss += loss
-				sampleCount++
 			}
-			avgLoss := totalLoss / float64(sampleCount)
-			fmt.Printf("Iteration %d, Average Loss: %v\n", iter, avgLoss)
+			avgLoss := totalLoss / float64(totalSamples)
+			fmt.Printf("Iteration %d (global %d), Average Loss: %v\n", iter, globalIteration, avgLoss)
 
-			// Patience-based early stopping.
 			if avgLoss < bestLoss {
 				bestLoss = avgLoss
 				patienceCounter = 0
@@ -480,7 +493,7 @@ func (nn *NeuralNetwork) Train(inputs [][]float64, targets [][]float64, iteratio
 				break
 			}
 		}
-	} // End of iterations
+	} // End of iterations.
 
 	fmt.Printf("Training completed in %v\n", time.Since(startTime))
 }

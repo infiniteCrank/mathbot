@@ -10,14 +10,6 @@ import (
 
 // ---------- New Self-Learning Components ----------
 
-// Environment interface defines the methods an environment must implement.
-type Environment interface {
-	Reset() []float64 // returns initial state
-	Step(action int) (nextState []float64, reward float64, done bool)
-	ActionSpace() int     // returns number of possible actions
-	StateDimensions() int // returns dimensionality of the state vector
-}
-
 // A simple sample environment that generates random states and rewards.
 // Replace this with your own environment logic (e.g., a game or control simulation).
 type RandomEnv struct {
@@ -64,45 +56,6 @@ func (env *RandomEnv) ActionSpace() int {
 
 func (env *RandomEnv) StateDimensions() int {
 	return env.stateDim
-}
-
-// Transition holds one experience tuple.
-type Transition struct {
-	State     []float64
-	Action    int
-	Reward    float64
-	NextState []float64
-	Done      bool
-}
-
-// ReplayBuffer stores a fixed number of transitions.
-type ReplayBuffer struct {
-	buffer  []Transition
-	maxSize int
-}
-
-func NewReplayBuffer(size int) *ReplayBuffer {
-	return &ReplayBuffer{
-		maxSize: size,
-		buffer:  make([]Transition, 0, size),
-	}
-}
-
-func (rb *ReplayBuffer) Add(t Transition) {
-	if len(rb.buffer) >= rb.maxSize {
-		// remove the oldest transition
-		rb.buffer = rb.buffer[1:]
-	}
-	rb.buffer = append(rb.buffer, t)
-}
-
-func (rb *ReplayBuffer) Sample(batchSize int) []Transition {
-	batch := make([]Transition, batchSize)
-	for i := 0; i < batchSize; i++ {
-		index := rand.Intn(len(rb.buffer))
-		batch[i] = rb.buffer[index]
-	}
-	return batch
 }
 
 // ---------- Agent that uses the network to learn from interactions ----------
@@ -211,8 +164,8 @@ func (a *Agent) TrainAgent(episodes int) {
 					trainStates = append(trainStates, t.State)
 					targets = append(targets, target)
 				}
-				// A single update iteration with no decay for demonstration.
-				a.network.Train(trainStates, targets, 1, 1.0, 1, a.batchSize)
+				// Run for, say, 10 iterations per update.
+				a.network.Train(trainStates, targets, 10, 1.0, 1, a.batchSize)
 			}
 		} // end episode
 
@@ -222,4 +175,10 @@ func (a *Agent) TrainAgent(episodes int) {
 		}
 		fmt.Printf("Episode %d, Total Reward: %f, Epsilon: %.4f\n", ep, totalReward, a.epsilon)
 	}
+}
+
+// PredictAction provides an action based on the current network prediction.
+func (a *Agent) PredictAction(state []float64) int {
+	qValues := a.network.PredictRegression(state)
+	return argmax(qValues)
 }

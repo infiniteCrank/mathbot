@@ -2,13 +2,13 @@ package NeuralNetwork
 
 import "math"
 
-// CalculateMSE computes the Mean Squared Error between predictions and targets.
-func CalculateMSE(predictions, targets []float64) float64 {
+// CalculateMSE computes the mean squared error for the full vectors.
+func CalculateMSE(outputs []float64, targets []float64) float64 {
 	mse := 0.0
-	for i := range predictions {
-		mse += math.Pow(targets[i]-predictions[i], 2)
+	for i := 0; i < len(outputs) && i < len(targets); i++ {
+		mse += 0.5 * math.Pow(targets[i]-outputs[i], 2)
 	}
-	return mse / float64(len(predictions))
+	return mse
 }
 
 // CalculateRMSE computes the Root Mean Squared Error.

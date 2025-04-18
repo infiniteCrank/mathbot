@@ -500,5 +500,3 @@ s = append(s, 4)
 ```go
 val, ok := myMap[key]
 ```
-
-(Additional Q&A will continue to be added here...)

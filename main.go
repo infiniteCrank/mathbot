@@ -794,7 +794,7 @@ func main() {
 					os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err != nil {
 					fmt.Printf("Warning: cannot open feedback.md: %v\n", err)
 				} else {
-					fmt.Fprintf(f, "## Q: %s\n## A: %s\n\n", q, fb)
+					fmt.Fprintf(f, "## Q: %s\n A: %s\n\n", q, fb)
 					f.Close()
 				}
 				// 3) If we successfully learned, bump counter and maybe save

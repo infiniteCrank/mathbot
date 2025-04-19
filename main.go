@@ -20,35 +20,6 @@ import (
 	_ "github.com/lib/pq"
 )
 
-func reloadAgent(dbConn *sql.DB, hiddenSize, activation int, lambda float64, modelID int) (*qaelm.QAELMAgent, error) {
-	// 1) re‑load all .md docs (including feedback.md)
-	docs, err := fileLoader.LoadMarkdownFiles("corpus")
-	if err != nil {
-		return nil, fmt.Errorf("loading corpus: %w", err)
-	}
-	if len(docs) == 0 {
-		return nil, fmt.Errorf("no markdown files in corpus")
-	}
-
-	// 2) parse Q/A and (re)train the ELM from scratch
-	qas := qaelm.ParseMarkdownQA(docs)
-	agent, err := qaelm.NewQAELMAgent(qas, hiddenSize, activation, lambda)
-	if err != nil {
-		return nil, fmt.Errorf("initializing agent: %w", err)
-	}
-
-	// 3) if the user specified -id, override the ELM weights too
-	if modelID > 0 {
-		loaded, err := elm.LoadModel(dbConn, modelID)
-		if err != nil {
-			return nil, fmt.Errorf("loading model %d: %w", modelID, err)
-		}
-		agent.Model = loaded
-	}
-
-	return agent, nil
-}
-
 //////////////////////////
 // Database Table Setup //
 //////////////////////////
@@ -175,44 +146,6 @@ func generateDataset(funcType string, samples int) ([][]float64, [][]float64) {
 	}
 
 	return inputs, outputs
-}
-
-// generateMixedCountingData generates mixed counting sequences based on various step sizes.
-func generateMixedCountingData(steps []int, samplesPerStep int) ([][]float64, []float64) {
-	inputs := [][]float64{}
-	targets := []float64{}
-
-	for _, step := range steps {
-		start := 0
-		for j := 0; j < samplesPerStep; j++ {
-			base := start + j*step
-			seq := []float64{
-				float64(base),
-				float64(base + step),
-				float64(base + 2*step),
-				float64(base + 3*step),
-				float64(base + 4*step),
-			}
-			target := float64(base + 5*step)
-			inputs = append(inputs, seq)
-			targets = append(targets, target)
-		}
-	}
-	return inputs, targets
-}
-
-// reshapeTargetsFlatTo2D reshapes a flat target slice into a 2D slice with the desired output dimension.
-func reshapeTargetsFlatTo2D(flat []float64, outputDim int) ([][]float64, error) {
-	if len(flat)%outputDim != 0 {
-		return nil, fmt.Errorf("cannot reshape: %d values into output dimension %d", len(flat), outputDim)
-	}
-	samples := len(flat) / outputDim
-	result := make([][]float64, samples)
-	for i := 0; i < samples; i++ {
-		start := i * outputDim
-		result[i] = flat[start : start+outputDim]
-	}
-	return result, nil
 }
 
 //////////////////////////

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/infiniteCrank/mathbot/elm"
 	"github.com/infiniteCrank/mathbot/tfidf"
+	"github.com/jdkato/prose/v2" // Import an NLP library
 	"gonum.org/v1/gonum/mat"
 )
 
@@ -258,9 +260,10 @@ func (a *QAELMAgent) vectorize(text string) []float64 {
 	return vec
 }
 
+// Updated ParseMarkdownQA function
 func ParseMarkdownQA(corpus []string) []QA {
 	var qas []QA
-	// regex to match question headings like '## Q: question text'
+	// Regex to match question headings like '## Q: question text'
 	qRegex := regexp.MustCompile(`^##\s*Q:\s*(.+)$`)
 	heading := regexp.MustCompile(`^##`)
 	splitLines := regexp.MustCompile("\r?\n")
@@ -272,7 +275,7 @@ func ParseMarkdownQA(corpus []string) []QA {
 				question := strings.TrimSpace(m[1])
 				var ansBuilder strings.Builder
 
-				// Gather answer lines until next heading
+				// Gather answer lines until the next heading
 				for j := i + 1; j < len(lines) && !heading.MatchString(lines[j]); j++ {
 					l := strings.TrimSpace(lines[j])
 					if l != "" {
@@ -283,12 +286,98 @@ func ParseMarkdownQA(corpus []string) []QA {
 
 				answer := strings.TrimSpace(ansBuilder.String())
 				if answer == "" {
-					// skip any QA with no real answer
+					// Skip any QA with no real answer
 					continue
 				}
 				qas = append(qas, QA{Question: question, Answer: answer})
 			}
 		}
+
+		//If no QA pairs found, generate them using NLP
+		// if len(qas) == 0 {
+		// 	qas = generateQuestionsAnswers(doc)
+		// }
 	}
 	return qas
+}
+
+// Function to generate questions and answers from text using NLP and save to a file
+func generateQuestionsAnswers(text string) []QA {
+	var qas []QA
+
+	// Create a new document from the text
+	doc, err := prose.NewDocument(text)
+	if err != nil {
+		return qas // Return empty if there's an error
+	}
+
+	// Extract sentences for potential questions
+	sentences := doc.Sentences()
+
+	// Loop through sentences, looking for patterns
+	for i := 0; i < len(sentences); i++ {
+		sentence := sentences[i].Text
+		trimmed := strings.TrimSpace(sentence)
+
+		// Check for descriptive sentences to generate questions
+		if strings.Contains(trimmed, "is") || strings.Contains(trimmed, "are") || strings.Contains(trimmed, "provides") {
+			// Formulate a question from a statement
+			question := "What " + strings.ToLower(trimmed[:1]) + trimmed[1:] // Make it a question
+			question = strings.ReplaceAll(question, " the ", " ")            // Remove if it's "the"
+			question = strings.ReplaceAll(question, " is ", " ? ")           // Convert to question format
+			answer := trimmed                                                // Use the same sentence as the answer
+
+			// Add the QA pair
+			if answer != "" {
+				qas = append(qas, QA{Question: question, Answer: answer})
+			}
+		}
+
+		// Creating questions based on code examples
+		if strings.Contains(trimmed, "func") {
+			// Generate questions from function definitions
+			question := "How to define a function in Go?"
+			answer := trimmed
+
+			// Enrich the answer with context
+			if i+1 < len(sentences) {
+				answer += " Example: " + strings.TrimSpace(sentences[i+1].Text)
+			}
+
+			qas = append(qas, QA{Question: question, Answer: answer})
+		}
+	}
+
+	// Save the generated QAs to a markdown file
+	err = saveQAsToFile(qas, "corpus/generated.md")
+	if err != nil {
+		// Handle file saving error (optional)
+		return nil
+	}
+
+	return qas
+}
+
+// Function to save QAs to a markdown file
+func saveQAsToFile(qas []QA, filepath string) error {
+	// Create or open the file
+	file, err := os.Create(filepath)
+	if err != nil {
+		return err // Return error if the file cannot be created/opened
+	}
+	defer file.Close() // Ensure the file is closed after writing
+
+	// Write the QAs to the file
+	for _, qa := range qas {
+		_, err = file.WriteString("## " + qa.Question + "\n\n")
+		if err != nil {
+			return err // Handle potential writing error
+		}
+		_, err = file.WriteString(qa.Answer + "\n\n---\n\n") // Markdown separation
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

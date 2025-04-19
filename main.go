@@ -20,6 +20,35 @@ import (
 	_ "github.com/lib/pq"
 )
 
+func reloadAgent(dbConn *sql.DB, hiddenSize, activation int, lambda float64, modelID int) (*qaelm.QAELMAgent, error) {
+	// 1) re‑load all .md docs (including feedback.md)
+	docs, err := fileLoader.LoadMarkdownFiles("corpus")
+	if err != nil {
+		return nil, fmt.Errorf("loading corpus: %w", err)
+	}
+	if len(docs) == 0 {
+		return nil, fmt.Errorf("no markdown files in corpus")
+	}
+
+	// 2) parse Q/A and (re)train the ELM from scratch
+	qas := qaelm.ParseMarkdownQA(docs)
+	agent, err := qaelm.NewQAELMAgent(qas, hiddenSize, activation, lambda)
+	if err != nil {
+		return nil, fmt.Errorf("initializing agent: %w", err)
+	}
+
+	// 3) if the user specified -id, override the ELM weights too
+	if modelID > 0 {
+		loaded, err := elm.LoadModel(dbConn, modelID)
+		if err != nil {
+			return nil, fmt.Errorf("loading model %d: %w", modelID, err)
+		}
+		agent.Model = loaded
+	}
+
+	return agent, nil
+}
+
 //////////////////////////
 // Database Table Setup //
 //////////////////////////
@@ -283,10 +312,38 @@ func main() {
 	modelID := flag.Int("id", 0, "Model ID for load/predict/retrain (used with addpredict, addTrain, countpredict, countingTrain, or list)")
 	inputStr := flag.String("input", "", "Comma-separated list of numbers as input (used in prediction modes)")
 	filename := flag.String("filename", "", "Path to the model file for import")
+	// new flags for one‑off teaching
+	learnQ := flag.String("learnQ", "", "Question to teach the agent (one‑off)")
+	learnA := flag.String("learnA", "", "Correct answer for learnQ (one‑off)")
+	agentSaveInterval := flag.Int("agent-save-interval", 5, "Save agent model every N feedback updates (agent mode)")
+
 	flag.Parse()
 
 	dbConn := db.ConnectDB()
 	defer dbConn.Close()
+
+	// if both learnQ+learnA provided, teach and exit immediately
+	if *mode == "agent" && *learnQ != "" && *learnA != "" {
+		// load and init agent exactly as below…
+		docs, err := fileLoader.LoadMarkdownFiles("corpus")
+		if err != nil || len(docs) == 0 {
+			log.Fatalf("Failed to load corpus for teaching: %v", err)
+		}
+		qas := qaelm.ParseMarkdownQA(docs)
+		agent, err := qaelm.NewQAELMAgent(qas, 32, 0, 0.001)
+		if err != nil {
+			log.Fatalf("Failed to init agent: %v", err)
+		}
+		// teach!
+		if err := agent.Learn(qaelm.QA{Question: *learnQ, Answer: *learnA}); err != nil {
+			log.Fatalf("Learn error: %v", err)
+		}
+		if err := agent.Model.SaveModel(dbConn); err != nil {
+			log.Fatalf("SaveModel error: %v", err)
+		}
+		fmt.Printf("Taught Q=%q, A=%q and saved model.\n", *learnQ, *learnA)
+		return
+	}
 
 	// Handle drop mode first.
 	if *mode == "drop" {
@@ -720,57 +777,118 @@ func main() {
 			fmt.Println("Model saved to database successfully.")
 		}
 	case "agent":
-		// Step 1: Load Markdown documents
+		// Load corpus and parse QA
 		docs, err := fileLoader.LoadMarkdownFiles("corpus")
 		if err != nil {
-			log.Fatalf("Failed to load markdown files: %v", err)
+			log.Fatalf("Failed to load markdown: %v", err)
 		}
 		if len(docs) == 0 {
-			log.Fatalf("No markdown files found in 'corpus' directory")
+			log.Fatalf("No markdown files in 'corpus'")
 		}
 		fmt.Printf("Loaded %d markdown files\n", len(docs))
 
-		// Step 2: Parse Q/A pairs
-
 		qas := qaelm.ParseMarkdownQA(docs)
 		if len(qas) == 0 {
-			log.Fatalf("No Q/A pairs found in markdown corpus. Ensure questions are marked with '## Q:' headings.")
+			log.Fatalf("No Q/A pairs found. Ensure '## Q:' headings.")
 		}
 		fmt.Printf("Extracted %d Q/A pairs\n", len(qas))
 
-		// Step 3: Train QA ELM agent
-		hiddenSize := 32 // adjust as needed
-		activation := 0  // 0: Sigmoid, 1: LeakyReLU, 2: Identity
+		// Train or load agent
+		hiddenSize := 32
+		activation := 0
 		regularization := 0.001
 		agent, err := qaelm.NewQAELMAgent(qas, hiddenSize, activation, regularization)
 		if err != nil {
-			log.Fatalf("Failed to initialize QA ELM agent: %v", err)
+			log.Fatalf("Failed to init agent: %v", err)
 		}
-		fmt.Println("ELM QA agent trained successfully.")
+		fmt.Println("Agent initialized.")
 
-		// Step 4: Interactive loop
+		// If loading an existing model
+		if *modelID > 0 {
+			loaded, err := elm.LoadModel(dbConn, *modelID)
+			if err != nil {
+				log.Fatalf("Failed to load agent ELM weights: %v", err)
+			}
+			agent.Model = loaded // override ELM inside agent
+			fmt.Printf("Loaded agent model ID %d from database.\n", *modelID)
+		}
+
+		// Interactive loop with periodic save
 		scanner := bufio.NewScanner(os.Stdin)
-		fmt.Println("Enter your question (or 'exit' to quit):")
+		updateCount := 0
 		for {
-			fmt.Print("> ")
+			fmt.Print("Enter question ('exit' to quit): ")
 			if !scanner.Scan() {
 				break
 			}
-			question := scanner.Text()
-			if question == "exit" || question == "quit" {
+			q := scanner.Text()
+			if strings.EqualFold(q, "exit") {
 				fmt.Println("Goodbye!")
 				break
 			}
-			answer, err := agent.Ask(question)
+
+			// Ask
+			ans, err := agent.Ask(q)
 			if err != nil {
-				fmt.Printf("Error answering question: %v\n", err)
+				fmt.Printf("Error: %v\n", err)
 			} else {
-				fmt.Printf("Answer: %s\n", answer)
+				fmt.Printf("Answer: %s\n", ans)
+			}
+
+			// Feedback & learn (with panic‑protection)
+			fmt.Print("If incorrect, enter correct answer (or blank): ")
+			if !scanner.Scan() {
+				break
+			}
+			fb := scanner.Text()
+			if fb != "" && !strings.EqualFold(fb, ans) {
+				// 1) Try to update ELM weights, catching any Gonum panic
+				learned := false
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							fmt.Printf("⚠️  Could not learn correction (vector-dimension error): %v\n", r)
+						}
+					}()
+					if err := agent.Learn(qaelm.QA{Question: q, Answer: fb}); err != nil {
+						fmt.Printf("Learn error: %v\n", err)
+						return
+					}
+					learned = true
+				}()
+				// 2) Always record the user’s correction in the corpus
+				if f, err := os.OpenFile("corpus/feedback.md",
+					os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err != nil {
+					fmt.Printf("Warning: cannot open feedback.md: %v\n", err)
+				} else {
+					fmt.Fprintf(f, "## Q: %s\n## A: %s\n\n", q, fb)
+					f.Close()
+				}
+				// 3) If we successfully learned, bump counter and maybe save
+				if learned {
+					updateCount++
+					fmt.Println("Agent updated.")
+					if *agentSaveInterval > 0 && updateCount%*agentSaveInterval == 0 {
+						if err := agent.Model.SaveModel(dbConn); err != nil {
+							fmt.Printf("SaveModel error: %v\n", err)
+						} else {
+							fmt.Printf("Agent model saved after %d updates.\n", updateCount)
+						}
+					}
+				}
 			}
 		}
-		if err := scanner.Err(); err != nil {
-			log.Fatalf("Error reading input: %v", err)
+
+		// On exit, final save if any updates
+		if *agentSaveInterval > 0 && updateCount > 0 {
+			err := agent.Model.SaveModel(dbConn)
+			if err != nil {
+				fmt.Printf("Final SaveModel error: %v\n", err)
+			} else {
+				fmt.Println("Final agent model saved successfully.")
+			}
 		}
+
 	default:
 		fmt.Println("Invalid mode. Use -mode with one of: addnew, addpredict, addTrain, countnew, countpredict, countingTrain, combineTech, protein, list, or drop")
 	}

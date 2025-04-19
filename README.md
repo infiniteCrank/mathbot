@@ -32,3 +32,9 @@ This will train a counting model (using 5-number sequences), assign its model ty
 
 ## To import a model from a JSON file back into your application and optionally save it in the database, use the following command
 ```go run main.go -mode=import -filename=model_1.json```
+
+## The application will load your QA agent, ask for questions, learn from feedback, and save its state based on your specified interval.
+```go run main.go -mode agent -id 1 -agent-save-interval 5```
+
+## one-off teaching:
+```go run main.go -mode=agent -learnQ="What’s 2+2?" -learnA="4"```

@@ -2,11 +2,16 @@ package agent
 
 import (
 	"errors"
+	"fmt"
+	"log"
 	"regexp"
 	"sort"
+	"strings"
+	"sync"
 
 	"github.com/infiniteCrank/mathbot/elm"
 	"github.com/infiniteCrank/mathbot/tfidf"
+	"gonum.org/v1/gonum/mat"
 )
 
 // QA holds a question-answer pair extracted from markdown.
@@ -17,12 +22,19 @@ type QA struct {
 
 // QAELMAgent wraps an ELM for QA tasks.
 type QAELMAgent struct {
-	model         *elm.ELM
+	Model         *elm.ELM
 	terms         []string           // sorted vocabulary terms
 	answers       []string           // list of unique answers
 	termToIndex   map[string]int     // maps term to vector index
 	answerToIndex map[string]int     // maps answer to class index
 	idf           map[string]float64 // inverse document frequency from training corpus
+	// Online-update matrices
+	P          *mat.Dense // (H^T H + λI)^{-1}
+	Beta       *mat.Dense // output weights
+	hiddenSize int
+	lambda     float64
+
+	mutex sync.Mutex
 }
 
 // NewQAELMAgent builds and trains an ELM on QA pairs.
@@ -88,13 +100,26 @@ func NewQAELMAgent(qas []QA, hiddenSize int, activation int, lambda float64) (*Q
 	elmModel := elm.NewELM(inputSize, hiddenSize, outputSize, activation, lambda)
 	elmModel.Train(trainInputs, trainTargets)
 
+	// 1) Initialize Beta to be hiddenSize×outputSize of zeros
+	beta := mat.NewDense(hiddenSize, outputSize, nil)
+
+	// 2) Initialize P = (λ I)^{-1} = (1/λ)·I
+	p := mat.NewDense(hiddenSize, hiddenSize, nil)
+	for i := 0; i < hiddenSize; i++ {
+		p.Set(i, i, 1.0/lambda)
+	}
+
 	return &QAELMAgent{
-		model:         elmModel,
+		Model:         elmModel,
 		terms:         terms,
 		answers:       answers,
 		termToIndex:   termToIndex,
 		answerToIndex: answerToIndex,
 		idf:           idf,
+		P:             p,
+		Beta:          beta,
+		hiddenSize:    hiddenSize,
+		lambda:        lambda,
 	}, nil
 }
 
@@ -114,7 +139,7 @@ func (agent *QAELMAgent) Ask(question string) (string, error) {
 		}
 	}
 	// Predict class scores
-	out := agent.model.Predict(vec)
+	out := agent.Model.Predict(vec)
 	// Find top answer index
 	maxIdx := 0
 	maxVal := out[0]
@@ -125,30 +150,143 @@ func (agent *QAELMAgent) Ask(question string) (string, error) {
 		}
 	}
 	if maxIdx < len(agent.answers) {
-		return agent.answers[maxIdx], nil
+		ans := agent.answers[maxIdx]
+		if ans == "" {
+			return "", errors.New("no answer found")
+		}
+		return ans, nil
 	}
 	return "", errors.New("prediction index out of range")
 }
 
-// ParseMarkdownQA extracts QA pairs from markdown corpus.
+// Learn updates the ELM weights using the Woodbury identity.
+func (a *QAELMAgent) Learn(newQA QA) error {
+	a.mutex.Lock()
+	defer a.mutex.Unlock()
+
+	// Check if Beta and P are initialized
+	if a.Beta == nil {
+		return fmt.Errorf("Beta matrix is not initialized")
+	}
+	if a.P == nil {
+		return fmt.Errorf("P matrix is not initialized")
+	}
+
+	// Add new answer class if needed
+	idx, exists := a.answerToIndex[newQA.Answer]
+	if !exists {
+		idx = len(a.answers)
+		a.answerToIndex[newQA.Answer] = idx
+		a.answers = append(a.answers, newQA.Answer)
+
+		// Expand Beta and ELM output weights
+		r, c := a.Beta.Dims() // Capture both dimensions
+		newBeta := mat.NewDense(r, c+1, nil)
+		newBeta.Slice(0, r, 0, c).(*mat.Dense).Copy(a.Beta)
+		a.Beta = newBeta
+
+		// Expand output weights in the model
+		for i := range a.Model.OutputWeights {
+			a.Model.OutputWeights[i] = append(a.Model.OutputWeights[i], 0)
+		}
+	}
+
+	// Compute hidden activations
+	x := a.vectorize(newQA.Question)
+	h := a.Model.HiddenLayer(x)
+	hVec := mat.NewVecDense(a.hiddenSize, h)
+
+	// Make sure y is initialized correctly and has the right dimensions
+	_, cols := a.Beta.Dims() // Capture dimensions properly
+	// log.Printf("Beta dimensions: %v", a.Beta.Dims())
+	log.Printf("Requesting target for index: %d (total classes: %d)", idx, cols)
+
+	if cols <= 0 {
+		return fmt.Errorf("Beta matrix has zero columns, cannot set target vector")
+	}
+
+	if idx >= cols {
+		return fmt.Errorf("Index for target vector (%d) exceeds number of classes (%d)", idx, cols)
+	}
+
+	// Initialize the target vector with valid dimensions
+	y := mat.NewVecDense(cols, nil)
+	y.SetVec(idx, 1)
+
+	// Woodbury update
+	Ph := mat.NewVecDense(a.hiddenSize, nil)
+	Ph.MulVec(a.P, hVec)
+	denom := 1 + mat.Dot(hVec, Ph)
+
+	// Delta = y - Beta^T h
+	pred := mat.NewVecDense(cols, nil)
+	pred.MulVec(a.Beta.T(), hVec)
+	delta := mat.NewVecDense(cols, nil)
+	delta.SubVec(y, pred)
+
+	// Beta += (Ph outer delta) / denom
+	outerBD := mat.NewDense(a.hiddenSize, cols, nil)
+	outerBD.Outer(1.0/denom, Ph, delta)
+	a.Beta.Add(a.Beta, outerBD)
+
+	// Update output weights in the model
+	for i := 0; i < a.hiddenSize; i++ {
+		for j := 0; j < cols; j++ {
+			a.Model.OutputWeights[i][j] = a.Beta.At(i, j)
+		}
+	}
+
+	// Update P matrix
+	outerPP := mat.NewDense(a.hiddenSize, a.hiddenSize, nil)
+	outerPP.Outer(1.0/denom, Ph, Ph)
+	a.P.Sub(a.P, outerPP)
+
+	return nil
+}
+
+// vectorize converts text into TF-IDF feature vector.
+func (a *QAELMAgent) vectorize(text string) []float64 {
+	tf := tfidf.NewTFIDF([]string{text})
+	tokens := tf.ProcessedWords
+	vec := make([]float64, len(a.terms))
+	total := float64(len(tokens))
+	for _, w := range tokens {
+		if idx, ok := a.termToIndex[w]; ok {
+			vec[idx] += a.idf[w] / total
+		}
+	}
+	return vec
+}
+
 func ParseMarkdownQA(corpus []string) []QA {
 	var qas []QA
 	// regex to match question headings like '## Q: question text'
-	r := regexp.MustCompile(`^##\s*Q:\s*(.+)$`)
+	qRegex := regexp.MustCompile(`^##\s*Q:\s*(.+)$`)
+	heading := regexp.MustCompile(`^##`)
 	splitLines := regexp.MustCompile("\r?\n")
+
 	for _, doc := range corpus {
 		lines := splitLines.Split(doc, -1)
 		for i, line := range lines {
-			if m := r.FindStringSubmatch(line); m != nil {
-				q := m[1]
-				// Collect answer lines until next heading
-				ans := ""
-				for j := i + 1; j < len(lines) && !regexp.MustCompile(`^##`).MatchString(lines[j]); j++ {
-					if lines[j] != "" {
-						ans += lines[j] + " "
+			if m := qRegex.FindStringSubmatch(line); m != nil {
+				question := strings.TrimSpace(m[1])
+				var ansBuilder strings.Builder
+
+				// Gather answer lines until next heading
+				for j := i + 1; j < len(lines) && !heading.MatchString(lines[j]); j++ {
+					l := strings.TrimSpace(lines[j])
+					if l != "" {
+						ansBuilder.WriteString(l)
+						ansBuilder.WriteByte(' ')
 					}
 				}
-				qas = append(qas, QA{Question: q, Answer: ans})
+
+				answer := strings.TrimSpace(ansBuilder.String())
+				if answer == "" {
+					// skip any QA with no real answer
+					continue
+				}
+				qas = append(qas, QA{Question: question, Answer: answer})
 			}
 		}
 	}

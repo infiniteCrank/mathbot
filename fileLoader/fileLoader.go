@@ -4,6 +4,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 )
 
 // LoadMarkdownFiles scans the given directory for .md files,
@@ -26,4 +28,35 @@ func LoadMarkdownFiles(directory string) ([]string, error) {
 		docs = append(docs, string(data))
 	}
 	return docs, nil
+}
+
+// processMarkdownContent processes a single Markdown document and extracts questions and answers
+func ProcessMarkdownContent(content string, questionsAndAnswers map[string]string) {
+	// Split content into lines
+	lines := strings.Split(content, "\n")
+	var currentSection string
+	var accumulatedContent strings.Builder
+
+	// Regex for section headings
+	headingRegex := regexp.MustCompile(`^##+\s+(.*)`)
+
+	// Read the file line by line
+	for _, line := range lines {
+		// Check if the line is a heading
+		if matches := headingRegex.FindStringSubmatch(line); matches != nil {
+			if accumulatedContent.Len() > 0 {
+				// Generate a question from the previous section and its content
+				questionsAndAnswers[currentSection] = accumulatedContent.String()
+				accumulatedContent.Reset() // Clear the builder for next content
+			}
+			currentSection = matches[1] // Set new section title as question
+		} else {
+			accumulatedContent.WriteString(line + "\n") // Accumulate content for the current section
+		}
+	}
+
+	// Handle the last section
+	if currentSection != "" && accumulatedContent.Len() > 0 {
+		questionsAndAnswers[currentSection] = accumulatedContent.String()
+	}
 }

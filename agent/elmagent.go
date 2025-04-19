@@ -97,10 +97,12 @@ func (a *ELMAgent) PredictAction(state []float64) int {
 
 // ReTrainModel aggregates training data from the replay buffer and re-trains the ELM.
 // Because ELM training is one-shot (closed-form), we re-train over the entire batch.
+// ReTrainModel aggregates training data from the replay buffer and re-trains the ELM.
 func (a *ELMAgent) ReTrainModel() {
 	if len(a.replayBuffer.buffer) < a.batchSize {
 		return // Not enough samples yet.
 	}
+
 	// For simplicity, we sample a batch from the buffer.
 	minibatch := a.replayBuffer.Sample(a.batchSize)
 	var trainStates [][]float64
@@ -111,7 +113,7 @@ func (a *ELMAgent) ReTrainModel() {
 		target := make([]float64, len(currentQ))
 		// Copy current predictions
 		copy(target, currentQ)
-		// For a one-step episode, if terminal use reward; otherwise, use discounted future value.
+		// Assign target based on whether the episode is done
 		if t.Done {
 			target[t.Action] = t.Reward
 		} else {
@@ -121,9 +123,11 @@ func (a *ELMAgent) ReTrainModel() {
 		trainStates = append(trainStates, t.State)
 		trainTargets = append(trainTargets, target)
 	}
-	// Re-train the ELM model (closed-form solution using ridge regression)
-	a.model.Train(trainStates, trainTargets)
-	fmt.Println("Re-trained ELM on", len(trainStates), "samples")
+
+	// Re-train the ELM with the aggregated training data.
+	a.model.Train(trainStates, trainTargets, nil, nil, 0)
+
+	fmt.Printf("Re-trained ELM on %d samples\n", len(trainStates))
 }
 
 // TrainAgent runs episodes, collects experiences, and periodically re-trains the ELM model.

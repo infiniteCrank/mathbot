@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math/rand"
 	"os"
 	"regexp"
 	"sort"
@@ -39,22 +40,35 @@ type QAELMAgent struct {
 	mutex sync.Mutex
 }
 
-// NewQAELMAgent builds and trains an ELM on QA pairs.
-func NewQAELMAgent(qas []QA, hiddenSize int, activation int, lambda float64) (*QAELMAgent, error) {
-	// Extract questions
-	questions := make([]string, len(qas))
-	for i, qa := range qas {
-		questions[i] = qa.Question
+// NewQAELMAgent builds and trains an ELM on QA pairs, incorporating validation for early stopping.
+func NewQAELMAgent(qas []QA, hiddenSize int, activation int, lambda float64, validationSplit float64, patience int) (*QAELMAgent, error) {
+	// Shuffle and split the dataset into training and validation sets
+	rand.Shuffle(len(qas), func(i, j int) {
+		qas[i], qas[j] = qas[j], qas[i]
+	})
+
+	// Determine split index
+	trainSize := int(float64(len(qas)) * (1 - validationSplit))
+	trainData := qas[:trainSize]
+	valData := qas[trainSize:]
+
+	// Extract questions for training and validation
+	trainQuestions := make([]string, len(trainData))
+	for i, qa := range trainData {
+		trainQuestions[i] = qa.Question
 	}
-	// Compute TF-IDF on all questions to build vocabulary and idf
-	tf := tfidf.NewTFIDF(questions)
+
+	// Compute TF-IDF on all training questions to build vocabulary and idf
+	tf := tfidf.NewTFIDF(trainQuestions)
 	tf.CalculateScores()
+
 	// Store idf values
 	idf := make(map[string]float64, len(tf.InverseDocFreq))
 	for term, val := range tf.InverseDocFreq {
 		idf[term] = val
 	}
-	// Build sorted vocabulary
+
+	// Build sorted vocabulary from idf
 	terms := make([]string, 0, len(idf))
 	for term := range idf {
 		terms = append(terms, term)
@@ -64,6 +78,7 @@ func NewQAELMAgent(qas []QA, hiddenSize int, activation int, lambda float64) (*Q
 	for i, t := range terms {
 		termToIndex[t] = i
 	}
+
 	// Extract unique answers
 	answerToIndex := make(map[string]int)
 	answers := make([]string, 0)
@@ -73,12 +88,13 @@ func NewQAELMAgent(qas []QA, hiddenSize int, activation int, lambda float64) (*Q
 			answers = append(answers, qa.Answer)
 		}
 	}
+
 	// Prepare training matrices
 	inputSize := len(terms)
 	outputSize := len(answers)
-	trainInputs := make([][]float64, len(qas))
-	trainTargets := make([][]float64, len(qas))
-	for i, qa := range qas {
+	trainInputs := make([][]float64, len(trainData))
+	trainTargets := make([][]float64, len(trainData))
+	for i, qa := range trainData {
 		// Vectorize question using same TF-IDF logic
 		tfq := tfidf.NewTFIDF([]string{qa.Question})
 		tfp := tfq.ProcessedWords
@@ -98,9 +114,33 @@ func NewQAELMAgent(qas []QA, hiddenSize int, activation int, lambda float64) (*Q
 		t[ai] = 1.0
 		trainTargets[i] = t
 	}
-	// Initialize and train ELM
+
+	// Prepare validation matrices similarly
+	valInputs := make([][]float64, len(valData))
+	valTargets := make([][]float64, len(valData))
+	for i, qa := range valData {
+		tfq := tfidf.NewTFIDF([]string{qa.Question})
+		tfp := tfq.ProcessedWords
+		vec := make([]float64, inputSize)
+		total := float64(len(tfp))
+		for _, w := range tfp {
+			if idx, ok := termToIndex[w]; ok {
+				if idfVal, ok2 := idf[w]; ok2 {
+					vec[idx] += (1.0 / total) * idfVal
+				}
+			}
+		}
+		valInputs[i] = vec
+		// One-hot encode answer
+		t := make([]float64, outputSize)
+		ai := answerToIndex[qa.Answer]
+		t[ai] = 1.0
+		valTargets[i] = t
+	}
+
+	// Initialize and train ELM model
 	elmModel := elm.NewELM(inputSize, hiddenSize, outputSize, activation, lambda)
-	elmModel.Train(trainInputs, trainTargets)
+	elmModel.Train(trainInputs, trainTargets, valInputs, valTargets, patience)
 
 	// 1) Initialize Beta to be hiddenSize×outputSize of zeros
 	beta := mat.NewDense(hiddenSize, outputSize, nil)
@@ -293,10 +333,6 @@ func ParseMarkdownQA(corpus []string) []QA {
 			}
 		}
 
-		//If no QA pairs found, generate them using NLP
-		// if len(qas) == 0 {
-		// 	qas = generateQuestionsAnswers(doc)
-		// }
 	}
 	return qas
 }

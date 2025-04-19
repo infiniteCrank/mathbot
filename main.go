@@ -249,32 +249,45 @@ func main() {
 	learnQ := flag.String("learnQ", "", "Question to teach the agent (one‑off)")
 	learnA := flag.String("learnA", "", "Correct answer for learnQ (one‑off)")
 	agentSaveInterval := flag.Int("agent-save-interval", 5, "Save agent model every N feedback updates (agent mode)")
+	validationSplit := flag.Float64("validation-split", 0.2, "Fraction of data to use for validation")
+	patience := flag.Int("patience", 100, "Number of epochs to wait for improvement before stopping")
 
 	flag.Parse()
 
 	dbConn := db.ConnectDB()
 	defer dbConn.Close()
 
-	// if both learnQ+learnA provided, teach and exit immediately
+	// If both learnQ and learnA are provided, teach and exit immediately.
 	if *mode == "agent" && *learnQ != "" && *learnA != "" {
-		// load and init agent exactly as below…
+		// Load and initialize agent using the provided Q&A pairs.
 		docs, err := fileLoader.LoadMarkdownFiles("corpus")
 		if err != nil || len(docs) == 0 {
 			log.Fatalf("Failed to load corpus for teaching: %v", err)
 		}
+
+		// Parse the Q/A pairs from the loaded documents.
 		qas := qaelm.ParseMarkdownQA(docs)
-		agent, err := qaelm.NewQAELMAgent(qas, 32, 0, 0.001)
+		if len(qas) == 0 {
+			log.Fatalf("No Q/A pairs found in the loaded documents.")
+		}
+
+		// Initialize the agent with parameters (update values as needed).
+		agent, err := qaelm.NewQAELMAgent(qas, 32, 0, 0.001, *validationSplit, *patience)
 		if err != nil {
 			log.Fatalf("Failed to init agent: %v", err)
 		}
-		// teach!
+
+		// Teach the agent with the new Q/A pair.
 		if err := agent.Learn(qaelm.QA{Question: *learnQ, Answer: *learnA}); err != nil {
 			log.Fatalf("Learn error: %v", err)
 		}
+
+		// Save the updated model to the database.
 		if err := agent.Model.SaveModel(dbConn); err != nil {
 			log.Fatalf("SaveModel error: %v", err)
 		}
-		fmt.Printf("Taught Q=%q, A=%q and saved model.\n", *learnQ, *learnA)
+
+		fmt.Printf("Taught Q=%q, A=%q and saved model successfully.\n", *learnQ, *learnA)
 		return
 	}
 
@@ -304,37 +317,56 @@ func main() {
 
 	switch *mode {
 	case "combineTech":
+		// Generate dataset for sine wave example
 		trainInputs, trainOutputs := generateDataset("sin", 100000)
+		// Initialize a new ELM to transform the input
 		elmModel := elm.NewELM(1, 20, 1, 0, 0.01)
-		elmModel.Train(trainInputs, trainOutputs)
+		fmt.Println("Training ELM model on sine data...")
+		elmModel.Train(trainInputs, trainOutputs, nil, nil, 0) // No validation dataset for the ELM training
+		fmt.Println("ELM training completed.")
+
+		// Transform training data using the trained ELM
 		transformedFeatures := make([][]float64, len(trainInputs))
 		for i, input := range trainInputs {
 			transformedFeatures[i] = elmModel.HiddenLayer(input)
 		}
-		layerSizes := []int{20, 20, 1}
-		activations := []int{NeuralNetwork.LeakyReLUActivation, NeuralNetwork.IdentityActivation}
-		nnModel := NeuralNetwork.NewNeuralNetwork(layerSizes, activations, 0.00001, 0.01)
-		nnModel.Train(transformedFeatures, trainOutputs, 1000, 0.95, 100, 32)
-		testInputs, _ := generateDataset("sin", 100)
+
+		// Define a neural network structure for further processing
+		layerSizes := []int{20, 20, 1}                                                            // Example: Hidden layer sizes for the NN
+		activations := []int{NeuralNetwork.LeakyReLUActivation, NeuralNetwork.IdentityActivation} // Activation functions
+		nnModel := NeuralNetwork.NewNeuralNetwork(layerSizes, activations, 0.00001, 0.01)         // Neural network initialization
+		fmt.Println("Training neural network model on transformed features...")
+		nnModel.Train(transformedFeatures, trainOutputs, 1000, 0.95, 100, 32) // Training the neural network
+		fmt.Println("Neural network training completed.")
+
+		// Evaluate the combined model on a new set of test inputs
+		testInputs, _ := generateDataset("sin", 100) // Generate new test data
 		for _, input := range testInputs {
-			transformed := elmModel.HiddenLayer(input)
-			predicted := nnModel.PredictRegression(transformed)
-			fmt.Printf("Input: %.2f, Predicted: %.4f\n", input[0], predicted[0])
+			transformed := elmModel.HiddenLayer(input)                           // Transform the test input using the ELM model
+			predicted := nnModel.PredictRegression(transformed)                  // Make a prediction with the NN model
+			fmt.Printf("Input: %.2f, Predicted: %.4f\n", input[0], predicted[0]) // Display the input and the prediction
 		}
 
 	case "protein":
 		windowSize := 15
 		inputs, outputs := generateProteinDataset(windowSize)
 		fmt.Printf("Generated %d protein training examples.\n", len(inputs))
-		inputSize := windowSize * 20
+
+		inputSize := windowSize * 20 // 20 is the size for one-hot encoding of amino acids
 		hiddenSize := 50
-		outputSize := 3
-		activation := 0
+		outputSize := 3 // Output for the three classes (Helix, Sheet, Coil)
+		activation := 0 // Choose appropriate activation function (e.g., 0 for Sigmoid)
 		regularization := 0.01
+
+		// Create the protein model
 		proteinModel := elm.NewELM(inputSize, hiddenSize, outputSize, activation, regularization)
 		proteinModel.ModelType = "protein_structure"
+
 		fmt.Println("Training protein structure prediction model...")
-		proteinModel.Train(inputs, outputs)
+		// Train the model using the training dataset
+		proteinModel.Train(inputs, outputs, nil, nil, 0) // For now, we pass nil since no validation is specified
+		fmt.Println("Training completed.")
+
 		correct := 0
 		for i, input := range inputs {
 			pred := proteinModel.Predict(input)
@@ -344,6 +376,7 @@ func main() {
 		}
 		accuracy := float64(correct) / float64(len(inputs)) * 100.0
 		fmt.Printf("Training accuracy: %.2f%%\n", accuracy)
+
 		if accuracy > 70.0 {
 			fmt.Println("Accuracy acceptable. Saving protein model...")
 			if err := proteinModel.SaveModel(dbConn); err != nil {
@@ -365,32 +398,43 @@ func main() {
 		var trainingTargets [][]float64
 		inputMax := 100.0
 		outputMax := 200.0
+
+		// Generate training samples.
 		for i := 0; i < numSamples; i++ {
 			a := rand.Float64() * inputMax
 			b := rand.Float64() * inputMax
+			// Normalize inputs and outputs
 			trainingInputs = append(trainingInputs, []float64{a / inputMax, b / inputMax})
-			trainingTargets = append(trainingTargets, []float64{(a + b) / outputMax})
+			trainingTargets = append(trainingTargets, []float64{(a + b) / outputMax}) // Normalize target
 		}
 		fmt.Printf("Generated %d training examples for addition.\n", numSamples)
+
+		// Create and train the addition model.
 		addModel := elm.NewELM(2, 10, 1, 0, 0.001)
-		addModel.ModelType = "addition"
+		addModel.ModelType = "addition" // Set model type for identification
 		fmt.Println("Training new addition model...")
-		addModel.Train(trainingInputs, trainingTargets)
+
+		// Train the model using the training data
+		addModel.Train(trainingInputs, trainingTargets, nil, nil, 0) // No validation data for now
 		fmt.Println("Training completed.")
+
+		// Evaluation logic
 		var mseSum float64
-		for i := 0; i < 100; i++ {
+		for i := 0; i < 100; i++ { // Evaluate over 100 samples
 			a := rand.Float64() * inputMax
 			b := rand.Float64() * inputMax
-			testInput := []float64{a / inputMax, b / inputMax}
+			testInput := []float64{a / inputMax, b / inputMax} // Normalize test input
 			pred := addModel.Predict(testInput)
-			predictedSum := pred[0] * outputMax
+			predictedSum := pred[0] * outputMax // Denormalize output
 			trueSum := a + b
 			diff := predictedSum - trueSum
-			mseSum += diff * diff
+			mseSum += diff * diff // Calculate mean squared error
 		}
-		rmse := math.Sqrt(mseSum / 100)
+		rmse := math.Sqrt(mseSum / 100) // Calculate root mean square error
 		addModel.RMSE = rmse
 		fmt.Printf("Evaluation RMSE for addition: %.6f\n", rmse)
+
+		// Save the model if RMSE is within acceptable limits
 		if rmse < 5.0 {
 			fmt.Println("RMSE acceptable. Saving addition model...")
 			if err := addModel.SaveModel(dbConn); err != nil {
@@ -431,7 +475,6 @@ func main() {
 		fmt.Printf("For input %.2f + %.2f, the predicted sum is: %.4f\n", nums[0], nums[1], predictedSum)
 
 	case "addTrain":
-		// New mode for retraining an addition model.
 		if *modelID <= 0 {
 			fmt.Println("Please provide a valid model ID for addition retraining using -id flag.")
 			os.Exit(1)
@@ -446,27 +489,36 @@ func main() {
 		var trainingTargets [][]float64
 		inputMax := 100.0
 		outputMax := 200.0
-		// Distribution A: Uniform from 0 to 100.
-		for i := 0; i < numSamples/2; i++ {
+
+		// Generate training data
+		for i := 0; i < numSamples; i++ {
 			a := rand.Float64() * inputMax
 			b := rand.Float64() * inputMax
 			trainingInputs = append(trainingInputs, []float64{a / inputMax, b / inputMax})
 			trainingTargets = append(trainingTargets, []float64{(a + b) / outputMax})
 		}
-		// Distribution B: Uniform from 20 to 80.
-		for i := 0; i < numSamples/2; i++ {
-			a := 20 + rand.Float64()*60
-			b := 20 + rand.Float64()*60
-			trainingInputs = append(trainingInputs, []float64{a / inputMax, b / inputMax})
-			trainingTargets = append(trainingTargets, []float64{(a + b) / outputMax})
-		}
 		fmt.Printf("Generated %d new training examples for addition retraining.\n", numSamples)
-		fmt.Println("Retraining addition model with new mixed data...")
-		loadedModel.Train(trainingInputs, trainingTargets)
+
+		// Create a validation dataset (e.g., using the last 200 examples)
+		var valInputs [][]float64
+		var valTargets [][]float64
+		for i := numSamples; i < numSamples+200; i++ {
+			a := rand.Float64() * inputMax
+			b := rand.Float64() * inputMax
+			valInputs = append(valInputs, []float64{a / inputMax, b / inputMax})
+			valTargets = append(valTargets, []float64{(a + b) / outputMax})
+		}
+		fmt.Printf("Generated %d validation examples for addition retraining.\n", len(valInputs))
+
+		fmt.Println("Retraining addition model with new data...")
+		// Pass training and validation sets along with patience to Train
+		patience := 10 // Set your patience or use a flag for dynamic input
+		loadedModel.Train(trainingInputs, trainingTargets, valInputs, valTargets, patience)
 		fmt.Println("Retraining completed.")
+
+		// Evaluation of the model after retraining
 		var mseSumAT float64
-		numEval := 100
-		for i := 0; i < numEval; i++ {
+		for i := 0; i < 100; i++ {
 			a := rand.Float64() * inputMax
 			b := rand.Float64() * inputMax
 			testInput := []float64{a / inputMax, b / inputMax}
@@ -476,7 +528,7 @@ func main() {
 			diff := predictedSum - trueSum
 			mseSumAT += diff * diff
 		}
-		rmseAT := math.Sqrt(mseSumAT / float64(numEval))
+		rmseAT := math.Sqrt(mseSumAT / 100)
 		loadedModel.RMSE = rmseAT
 		fmt.Printf("Evaluation RMSE after addition retraining: %.6f\n", rmseAT)
 		if rmseAT < 5.0 {
@@ -489,10 +541,8 @@ func main() {
 		} else {
 			fmt.Println("RMSE too high. Updated addition model not saved.")
 		}
-
 	// ------------------ Counting Modes ------------------
 	case "countnew":
-		// Original counting training mode.
 		startNum := 1
 		endNum := 6000
 		var trainingInputs [][]float64
@@ -509,7 +559,7 @@ func main() {
 			trainingTargets = append(trainingTargets, []float64{float64(i + 5)})
 		}
 		maxValue := float64(endNum + 5)
-		// Normalize sequential data.
+		// Normalize training data
 		for i := range trainingInputs {
 			for j := range trainingInputs[i] {
 				trainingInputs[i][j] /= maxValue
@@ -519,10 +569,38 @@ func main() {
 			trainingTargets[i][0] /= maxValue
 		}
 		fmt.Printf("Generated %d training examples for counting.\n", len(trainingInputs))
+
+		// Create a validation dataset (e.g., using the last 100 sequential examples)
+		var valInputs [][]float64
+		var valTargets [][]float64
+		for i := endNum - 100; i <= endNum-5; i++ {
+			seq := []float64{
+				float64(i),
+				float64(i + 1),
+				float64(i + 2),
+				float64(i + 3),
+				float64(i + 4),
+			}
+			valInputs = append(valInputs, seq)
+			valTargets = append(valTargets, []float64{float64(i + 5)})
+		}
+		// Normalize validation data
+		for i := range valInputs {
+			for j := range valInputs[i] {
+				valInputs[i][j] /= maxValue
+			}
+		}
+		for i := range valTargets {
+			valTargets[i][0] /= maxValue
+		}
+
 		countModel := elm.NewELM(5, 50, 1, 0, 0.001)
 		countModel.ModelType = "counting"
 		fmt.Println("Training new counting model on sequential data...")
-		countModel.Train(trainingInputs, trainingTargets)
+
+		// Pass validation inputs and targets along with patience to Train
+		patience := 10 // Set your patience or use a flag for dynamic input
+		countModel.Train(trainingInputs, trainingTargets, valInputs, valTargets, patience)
 		fmt.Println("Training completed on sequential data.")
 
 		var predictions []float64
@@ -535,12 +613,13 @@ func main() {
 				float64(i + 3),
 				float64(i + 4),
 			}
+			// Normalize input
 			for j := range testInput {
 				testInput[j] /= maxValue
 			}
 			pred := countModel.Predict(testInput)
-			pred[0] *= maxValue
-			predictions = append(predictions, pred[0])
+			predictedNum := pred[0] * maxValue
+			predictions = append(predictions, predictedNum)
 			actuals = append(actuals, float64(i+5))
 		}
 		mse := 0.0
@@ -727,10 +806,10 @@ func main() {
 		fmt.Printf("Extracted %d Q/A pairs\n", len(qas))
 
 		// Train or load agent
-		hiddenSize := 32
+		hiddenSize := 50
 		activation := 0
-		regularization := 0.001
-		agent, err := qaelm.NewQAELMAgent(qas, hiddenSize, activation, regularization)
+		lambda := 0.000001 // Regularization parameter
+		agent, err := qaelm.NewQAELMAgent(qas, hiddenSize, activation, lambda, *validationSplit, *patience)
 		if err != nil {
 			log.Fatalf("Failed to init agent: %v", err)
 		}

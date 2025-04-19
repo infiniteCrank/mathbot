@@ -96,48 +96,88 @@ func (elm *ELM) HiddenLayer(input []float64) []float64 {
 // Train computes the output weights using ridge regression.
 // It assumes trainInputs is an nSamples x InputSize matrix and
 // trainTargets is an nSamples x OutputSize matrix.
-func (elm *ELM) Train(trainInputs [][]float64, trainTargets [][]float64) {
+// Train computes the output weights using ridge regression and includes early stopping.
+func (elm *ELM) Train(trainInputs [][]float64, trainTargets [][]float64, valInputs [][]float64, valTargets [][]float64, patience int) {
+	bestValLoss := math.MaxFloat64 // Initialize to a very high value
+	stepsWithoutImprovement := 0
 
-	// Check if the number of training inputs matches the number of training targets
-	if len(trainInputs) != len(trainTargets) {
-		panic(fmt.Sprintf("Train error: input and target size mismatch (inputs=%d, targets=%d)", len(trainInputs), len(trainTargets)))
+	// Set the maximum number of training epochs
+	maxEpochs := 1000 // Strive for enough epochs to allow convergence
+
+	for epoch := 0; epoch < maxEpochs; epoch++ {
+		// Perform a single epoch of training
+		elm.TrainEpoch(trainInputs, trainTargets)
+
+		// Calculate the validation loss
+		valLoss := elm.CalculateLoss(valInputs, valTargets)
+
+		fmt.Printf("Epoch %d - Validation Loss: %.4f\n", epoch+1, valLoss)
+
+		// Check for improvement in validation loss
+		if valLoss < bestValLoss {
+			bestValLoss = valLoss
+			stepsWithoutImprovement = 0 // Reset counter if improvement is made
+			// Save best weights or perform any other actions if desired
+		} else {
+			stepsWithoutImprovement++
+			if stepsWithoutImprovement >= patience {
+				fmt.Println("Early stopping triggered.")
+				break // Stop training due to lack of improvement
+			}
+		}
 	}
+}
 
-	nSamples := len(trainInputs) // Get the number of training samples
+// CalculateLoss computes loss on given inputs and targets
+func (elm *ELM) CalculateLoss(inputs [][]float64, targets [][]float64) float64 {
+	// Calculate mean squared error (MSE) over the given validation set
+	var totalLoss float64
+	for i := 0; i < len(inputs); i++ {
+		pred := elm.Predict(inputs[i])
+		for j := 0; j < len(pred); j++ {
+			totalLoss += math.Pow(pred[j]-targets[i][j], 2) // MSE calculation
+		}
+	}
+	return totalLoss / float64(len(inputs)) // Return average loss
+}
+
+// TrainEpoch performs a single epoch of training using the input-output pairs
+func (elm *ELM) TrainEpoch(trainInputs [][]float64, trainTargets [][]float64) {
+	nSamples := len(trainInputs)
 
 	// Compute hidden layer output matrix H (nSamples x HiddenSize)
-	H := make([][]float64, nSamples) // Create a slice for hidden layer outputs for all samples
+	H := make([][]float64, nSamples)
 	for i := 0; i < nSamples; i++ {
-		H[i] = elm.HiddenLayer(trainInputs[i]) // Calculate hidden layer output for each input sample
+		H[i] = elm.HiddenLayer(trainInputs[i]) // Get hidden layer output
 	}
 
 	// Compute H^T * H (HiddenSize x HiddenSize)
-	HtH := make([][]float64, elm.HiddenSize) // Create a matrix for H transpose times H
+	HtH := make([][]float64, elm.HiddenSize)
 	for i := 0; i < elm.HiddenSize; i++ {
-		HtH[i] = make([]float64, elm.HiddenSize) // Initialize each row of the matrix
+		HtH[i] = make([]float64, elm.HiddenSize)
 		for j := 0; j < elm.HiddenSize; j++ {
-			sum := 0.0 // Initialize sum for the computation
+			sum := 0.0
 			for k := 0; k < nSamples; k++ {
-				sum += H[k][i] * H[k][j] // Compute the dot product for H^T * H
+				sum += H[k][i] * H[k][j] // Compute dot products
 			}
-			// Add regularization term on the diagonal for ridge regression
+			// Add regularization term on the diagonal
 			if i == j {
 				sum += elm.Regularization
 			}
-			HtH[i][j] = sum // Assign the computed value to the matrix
+			HtH[i][j] = sum
 		}
 	}
 
 	// Compute H^T * Y (HiddenSize x OutputSize)
-	HtY := make([][]float64, elm.HiddenSize) // Create a matrix for H transpose times output targets
+	HtY := make([][]float64, elm.HiddenSize)
 	for i := 0; i < elm.HiddenSize; i++ {
-		HtY[i] = make([]float64, elm.OutputSize) // Initialize each row of the matrix
+		HtY[i] = make([]float64, elm.OutputSize)
 		for j := 0; j < elm.OutputSize; j++ {
-			sum := 0.0 // Initialize sum for the computation
+			sum := 0.0
 			for k := 0; k < nSamples; k++ {
-				sum += H[k][i] * trainTargets[k][j] // Compute the dot product for H^T * Y
+				sum += H[k][i] * trainTargets[k][j] // Compute dot products for H^T * Y
 			}
-			HtY[i][j] = sum // Assign the computed value to the matrix
+			HtY[i][j] = sum
 		}
 	}
 
@@ -146,8 +186,7 @@ func (elm *ELM) Train(trainInputs [][]float64, trainTargets [][]float64) {
 	if err != nil {
 		panic(fmt.Sprintf("Matrix inversion failed: %v", err)) // Handle error for matrix inversion
 	}
-	Beta := MatrixMultiply(inv, HtY) // Multiply the inverted matrix with H^T * Y to get output weights
-	elm.OutputWeights = Beta         // Save the output weights for the ELM
+	elm.OutputWeights = MatrixMultiply(inv, HtY) // Multiply the inverted matrix with H^T * Y to get output weights
 }
 
 // Predict returns the prediction for a single input sample.

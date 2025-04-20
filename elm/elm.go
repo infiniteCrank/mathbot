@@ -95,37 +95,10 @@ func (elm *ELM) HiddenLayer(input []float64) []float64 {
 
 // Train computes the output weights using ridge regression.
 // It assumes trainInputs is an nSamples x InputSize matrix and
-// trainTargets is an nSamples x OutputSize matrix.
-// Train computes the output weights using ridge regression and includes early stopping.
-func (elm *ELM) Train(trainInputs [][]float64, trainTargets [][]float64, valInputs [][]float64, valTargets [][]float64, patience int) {
-	bestValLoss := math.MaxFloat64 // Initialize to a very high value
-	stepsWithoutImprovement := 0
-
-	// Set the maximum number of training epochs
-	maxEpochs := 1000 // Strive for enough epochs to allow convergence
-
-	for epoch := 0; epoch < maxEpochs; epoch++ {
-		// Perform a single epoch of training
-		elm.TrainEpoch(trainInputs, trainTargets)
-
-		// Calculate the validation loss
-		valLoss := elm.CalculateLoss(valInputs, valTargets)
-
-		fmt.Printf("Epoch %d - Validation Loss: %.4f\n", epoch+1, valLoss)
-
-		// Check for improvement in validation loss
-		if valLoss < bestValLoss {
-			bestValLoss = valLoss
-			stepsWithoutImprovement = 0 // Reset counter if improvement is made
-			// Save best weights or perform any other actions if desired
-		} else {
-			stepsWithoutImprovement++
-			if stepsWithoutImprovement >= patience {
-				fmt.Println("Early stopping triggered.")
-				break // Stop training due to lack of improvement
-			}
-		}
-	}
+func (elm *ELM) Train(trainInputs [][]float64, trainTargets [][]float64, valInputs [][]float64, valTargets [][]float64) {
+	elm.TrainEpoch(trainInputs, trainTargets)
+	valLoss := elm.CalculateLoss(valInputs, valTargets)
+	fmt.Printf("Validation Loss: %.4f\n", valLoss)
 }
 
 // CalculateLoss computes loss on given inputs and targets

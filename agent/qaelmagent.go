@@ -43,7 +43,7 @@ type QAELMAgent struct {
 }
 
 // NewQAELMAgent builds and trains an ELM on QA pairs, incorporating validation for early stopping.
-func NewQAELMAgent(qas []QA, hiddenSize int, activation int, lambda float64, validationSplit float64, patience int) (*QAELMAgent, error) {
+func NewQAELMAgent(qas []QA, hiddenSize int, activation int, lambda float64, validationSplit float64) (*QAELMAgent, error) {
 	// Shuffle and split the dataset into training and validation sets
 	rand.Shuffle(len(qas), func(i, j int) {
 		qas[i], qas[j] = qas[j], qas[i]
@@ -142,7 +142,7 @@ func NewQAELMAgent(qas []QA, hiddenSize int, activation int, lambda float64, val
 
 	// Initialize and train ELM model
 	elmModel := elm.NewELM(inputSize, hiddenSize, outputSize, activation, lambda)
-	elmModel.Train(trainInputs, trainTargets, valInputs, valTargets, patience)
+	elmModel.Train(trainInputs, trainTargets, valInputs, valTargets)
 
 	// 1) Initialize Beta to be hiddenSize×outputSize of zeros
 	beta := mat.NewDense(hiddenSize, outputSize, nil)
@@ -212,7 +212,7 @@ func (a *QAELMAgent) Learn(newQA QA) error {
 	// 1) Append to the master corpus
 	a.Corpus = append(a.Corpus, newQA)
 
-	if err := a.Retrain(0.1 /* 10% val */, 5 /* patience */); err != nil {
+	if err := a.Retrain(0.1 /* 10% val */); err != nil {
 		return err
 	}
 
@@ -429,9 +429,9 @@ func saveQAsToFile(qas []QA, filepath string) error {
 }
 
 // Retrain rebuilds the ELM from the full QA corpus using the same parameters.
-func (a *QAELMAgent) Retrain(validationSplit float64, patience int) error {
+func (a *QAELMAgent) Retrain(validationSplit float64) error {
 	// Re-run the training pipeline on the entire corpus
-	newAgent, err := NewQAELMAgent(a.Corpus, a.hiddenSize, a.Model.Activation, a.lambda, validationSplit, patience)
+	newAgent, err := NewQAELMAgent(a.Corpus, a.hiddenSize, a.Model.Activation, a.lambda, validationSplit)
 	if err != nil {
 		return fmt.Errorf("retraining failed: %w", err)
 	}

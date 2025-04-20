@@ -292,7 +292,6 @@ func main() {
 	learnA := flag.String("learnA", "", "Correct answer for learnQ (one‑off)")
 	agentSaveInterval := flag.Int("agent-save-interval", 5, "Save agent model every N feedback updates (agent mode)")
 	validationSplit := flag.Float64("validation-split", 0.2, "Fraction of data to use for validation")
-	patience := flag.Int("p", 100, "Number of epochs to wait for improvement before stopping")
 	nSamples := flag.Int("n", 10000, "number of training samples")
 	seqLen := flag.Int("seq", 5, "length of input sequence")
 	predLen := flag.Int("pred", 5, "length of prediction sequence")
@@ -322,7 +321,7 @@ func main() {
 		}
 
 		// Initialize the agent with parameters (update values as needed).
-		agent, err := qaelm.NewQAELMAgent(qas, 32, 0, 0.001, *validationSplit, *patience)
+		agent, err := qaelm.NewQAELMAgent(qas, 32, 0, 0.001, *validationSplit)
 		if err != nil {
 			log.Fatalf("Failed to init agent: %v", err)
 		}
@@ -372,7 +371,7 @@ func main() {
 		// Initialize a new ELM to transform the input
 		elmModel := elm.NewELM(1, 20, 1, 0, 0.01)
 		fmt.Println("Training ELM model on sine data...")
-		elmModel.Train(trainInputs, trainOutputs, nil, nil, 0) // No validation dataset for the ELM training
+		elmModel.Train(trainInputs, trainOutputs, nil, nil) // No validation dataset for the ELM training
 		fmt.Println("ELM training completed.")
 
 		// Transform training data using the trained ELM
@@ -414,7 +413,7 @@ func main() {
 
 		fmt.Println("Training protein structure prediction model...")
 		// Train the model using the training dataset
-		proteinModel.Train(inputs, outputs, nil, nil, 0) // For now, we pass nil since no validation is specified
+		proteinModel.Train(inputs, outputs, nil, nil) // For now, we pass nil since no validation is specified
 		fmt.Println("Training completed.")
 
 		correct := 0
@@ -465,7 +464,7 @@ func main() {
 		fmt.Println("Training new addition model...")
 
 		// Train the model using the training data
-		addModel.Train(trainingInputs, trainingTargets, nil, nil, 0) // No validation data for now
+		addModel.Train(trainingInputs, trainingTargets, nil, nil) // No validation data for now
 		fmt.Println("Training completed.")
 
 		// Evaluation logic
@@ -562,8 +561,7 @@ func main() {
 
 		fmt.Println("Retraining addition model with new data...")
 		// Pass training and validation sets along with patience to Train
-		patience := 10 // Set your patience or use a flag for dynamic input
-		loadedModel.Train(trainingInputs, trainingTargets, valInputs, valTargets, patience)
+		loadedModel.Train(trainingInputs, trainingTargets, valInputs, valTargets)
 		fmt.Println("Retraining completed.")
 
 		// Evaluation of the model after retraining
@@ -649,8 +647,7 @@ func main() {
 		fmt.Println("Training new counting model on sequential data...")
 
 		// Pass validation inputs and targets along with patience to Train
-		patience := 10 // Set your patience or use a flag for dynamic input
-		countModel.Train(trainingInputs, trainingTargets, valInputs, valTargets, patience)
+		countModel.Train(trainingInputs, trainingTargets, valInputs, valTargets)
 		fmt.Println("Training completed on sequential data.")
 
 		var predictions []float64
@@ -859,7 +856,7 @@ func main() {
 		hiddenSize := 50
 		activation := 0
 		lambda := 0.000001 // Regularization parameter
-		agent, err := qaelm.NewQAELMAgent(qas, hiddenSize, activation, lambda, *validationSplit, *patience)
+		agent, err := qaelm.NewQAELMAgent(qas, hiddenSize, activation, lambda, *validationSplit)
 		if err != nil {
 			log.Fatalf("Failed to init agent: %v", err)
 		}
@@ -915,7 +912,7 @@ func main() {
 				agent.Corpus = append(agent.Corpus, qaelm.QA{Question: q, Answer: fb})
 
 				// 3) Fully retrain the agent on the expanded corpus
-				if err := agent.Retrain(*validationSplit, *patience); err != nil {
+				if err := agent.Retrain(*validationSplit); err != nil {
 					fmt.Printf("⚠️  Retrain error: %v\n", err)
 				} else {
 					fmt.Println("Agent fully retrained with new feedback.")
@@ -949,7 +946,7 @@ func main() {
 		// Train ELM
 		inputSize := len(trainX[0])
 		elmModel := elm.NewELM(inputSize, *hiddenSize, *predLen, 0, *lambda)
-		elmModel.Train(trainX, trainY, valX, valY, *patience)
+		elmModel.Train(trainX, trainY, valX, valY)
 
 		// Compute validation RMSE
 		var sum float64

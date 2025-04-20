@@ -904,39 +904,28 @@ func main() {
 			}
 			fb := scanner.Text()
 			if fb != "" && !strings.EqualFold(fb, ans) {
-				// 1) Try to update ELM weights, catching any Gonum panic
-				learned := false
-				func() {
-					defer func() {
-						if r := recover(); r != nil {
-							fmt.Printf("⚠️  Could not learn correction (vector-dimension error): %v\n", r)
-						}
-					}()
-					if err := agent.Learn(qaelm.QA{Question: q, Answer: fb}); err != nil {
-						fmt.Printf("Learn error: %v\n", err)
-						return
-					}
-					learned = true
-				}()
-				// 2) Always record the user’s correction in the corpus
-				if f, err := os.OpenFile("corpus/feedback.md",
-					os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err != nil {
-					fmt.Printf("Warning: cannot open feedback.md: %v\n", err)
-				} else {
+				// 1) Record user correction in corpus file
+				f, err := os.OpenFile("corpus/feedback.md", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+				if err == nil {
 					fmt.Fprintf(f, "## Q: %s\n A: %s\n\n", q, fb)
 					f.Close()
 				}
-				// 3) If we successfully learned, bump counter and maybe save
-				if learned {
-					updateCount++
-					fmt.Println("Agent updated.")
-					if *agentSaveInterval > 0 && updateCount%*agentSaveInterval == 0 {
-						if err := agent.Model.SaveModel(dbConn); err != nil {
-							fmt.Printf("SaveModel error: %v\n", err)
-						} else {
-							fmt.Printf("Agent model saved after %d updates.\n", updateCount)
-						}
-					}
+
+				// 2) Append to in-memory corpus
+				agent.Corpus = append(agent.Corpus, qaelm.QA{Question: q, Answer: fb})
+
+				// 3) Fully retrain the agent on the expanded corpus
+				if err := agent.Retrain(*validationSplit, *patience); err != nil {
+					fmt.Printf("⚠️  Retrain error: %v\n", err)
+				} else {
+					fmt.Println("Agent fully retrained with new feedback.")
+				}
+
+				// 4) Persist the updated model
+				if err := agent.Model.SaveModel(dbConn); err != nil {
+					fmt.Printf("SaveModel error: %v\n", err)
+				} else {
+					fmt.Println("Agent model saved after retrain.")
 				}
 			}
 		}
@@ -954,29 +943,44 @@ func main() {
 		// Generate and split data
 		allX, allY := generateArithData(*nSamples, *seqLen, *predLen)
 		valSize := *nSamples / 5
-		valX := allX[:valSize]
-		valY := allY[:valSize]
-		trainX := allX[valSize:]
-		trainY := allY[valSize:]
+		valX, valY := allX[:valSize], allY[:valSize]
+		trainX, trainY := allX[valSize:], allY[valSize:]
 
-		// Initialize and train ELM
+		// Train ELM
 		inputSize := len(trainX[0])
 		elmModel := elm.NewELM(inputSize, *hiddenSize, *predLen, 0, *lambda)
 		elmModel.Train(trainX, trainY, valX, valY, *patience)
 
-		// Test on fixed sequences (no randomness here), length based on seqLen
-		seqLenVal := *seqLen
-		tests := make([][]float64, 0, 2)
-		// Sequence with step 1: 1,2,...
-		seqA := make([]float64, seqLenVal)
-		// Sequence with step 2: 2,4,...
-		seqB := make([]float64, seqLenVal)
-		for i := 0; i < seqLenVal; i++ {
-			seqA[i] = float64(1 + i*1)
-			seqB[i] = float64(2 + i*2)
+		// Compute validation RMSE
+		var sum float64
+		for i := range valX {
+			predVec := elmModel.Predict(valX[i])
+			for j := range predVec {
+				diff := predVec[j] - valY[i][j]
+				sum += diff * diff
+			}
 		}
-		tests = append(tests, seqA, seqB)
+		rmse := math.Sqrt(sum / float64(len(valX)*len(valY[0])))
+		fmt.Printf("Validation RMSE: %.4f\n", rmse)
 
+		// Save model if RMSE acceptable
+		if rmse <= 1 {
+			elmModel.ModelType = "counting"
+			if err := elmModel.SaveModel(dbConn); err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to save model: %v\n", err)
+			} else {
+				fmt.Println("Model saved as 'counting' type.")
+			}
+		} else {
+			fmt.Println("RMSE too high. Model not saved.")
+		}
+
+		// Test predictions
+		seqLenVal := *seqLen
+		tests := [][]float64{
+			makeTestSeq(1, 1, seqLenVal),
+			makeTestSeq(2, 2, seqLenVal),
+		}
 		for _, seq := range tests {
 			feat := makeSeqFeatures(seq)
 			pred := elmModel.Predict(feat)
@@ -990,6 +994,15 @@ func main() {
 	default:
 		fmt.Println("Invalid mode. Use -mode with one of: addnew, addpredict, addTrain, countnew, countpredict, countingTrain, combineTech, protein, list, or drop")
 	}
+}
+
+// makeTestSeq creates an arithmetic sequence of given length and step
+func makeTestSeq(start float64, step float64, length int) []float64 {
+	seq := make([]float64, length)
+	for i := 0; i < length; i++ {
+		seq[i] = start + float64(i)*step
+	}
+	return seq
 }
 
 // argMax returns the index of the maximum value in a slice.

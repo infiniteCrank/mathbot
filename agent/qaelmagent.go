@@ -37,6 +37,8 @@ type QAELMAgent struct {
 	hiddenSize int
 	lambda     float64
 
+	Corpus []QA // all seen QAs, including initially parsed + any
+
 	mutex sync.Mutex
 }
 
@@ -162,6 +164,7 @@ func NewQAELMAgent(qas []QA, hiddenSize int, activation int, lambda float64, val
 		Beta:          beta,
 		hiddenSize:    hiddenSize,
 		lambda:        lambda,
+		Corpus:        qas,
 	}, nil
 }
 
@@ -205,6 +208,13 @@ func (agent *QAELMAgent) Ask(question string) (string, error) {
 func (a *QAELMAgent) Learn(newQA QA) error {
 	a.mutex.Lock()
 	defer a.mutex.Unlock()
+
+	// 1) Append to the master corpus
+	a.Corpus = append(a.Corpus, newQA)
+
+	if err := a.Retrain(0.1 /* 10% val */, 5 /* patience */); err != nil {
+		return err
+	}
 
 	// Check if Beta and P are initialized
 	if a.Beta == nil {
@@ -415,5 +425,24 @@ func saveQAsToFile(qas []QA, filepath string) error {
 		}
 	}
 
+	return nil
+}
+
+// Retrain rebuilds the ELM from the full QA corpus using the same parameters.
+func (a *QAELMAgent) Retrain(validationSplit float64, patience int) error {
+	// Re-run the training pipeline on the entire corpus
+	newAgent, err := NewQAELMAgent(a.Corpus, a.hiddenSize, a.Model.Activation, a.lambda, validationSplit, patience)
+	if err != nil {
+		return fmt.Errorf("retraining failed: %w", err)
+	}
+	// Swap internal state
+	a.Model = newAgent.Model
+	a.terms = newAgent.terms
+	a.answers = newAgent.answers
+	a.termToIndex = newAgent.termToIndex
+	a.answerToIndex = newAgent.answerToIndex
+	a.idf = newAgent.idf
+	a.P = newAgent.P
+	a.Beta = newAgent.Beta
 	return nil
 }

@@ -103,3 +103,15 @@ General Tips
 Always Confirm: When using the drop mode, always confirm your intention to delete all models or tables to avoid accidental data loss.
 Monitoring Performance: Check the output logs for action success, such as model saves or training completions, to keep track of the agent's activities.
 Use Meaningful Questions and Answers: Ensure that teaching the agent with learnQ and learnA consists of meaningful and informative content to enhance response accuracy in future queries.
+
+# 2) Use 20 000 training samples, 7‑step inputs predicting 7 steps ahead,
+#    300 hidden neurons, λ=1e-3, patience=150, fixed RNG seed for reproducibility
+go run main.go \
+  -mode=countBySteps \
+  -n 20000 \
+  -seq 7 \
+  -pred 7 \
+  -h 300 \
+  -lambda 0.001 \
+  -p 150 \
+  -seed 42

@@ -20,6 +20,48 @@ import (
 	_ "github.com/lib/pq"
 )
 
+// rng is the random number generator for reproducible sequences
+var rng *rand.Rand
+
+// generateArithData creates nSamples of arithmetic sequences with random start and step
+func generateArithData(nSamples, seqLen, predLen int) ([][]float64, [][]float64) {
+	inputs := make([][]float64, nSamples)
+	targets := make([][]float64, nSamples)
+	for i := 0; i < nSamples; i++ {
+		start := rng.Float64()*10 - 5 // random start in [-5,5)
+		step := rng.Float64()*4 - 2   // random step in [-2,2)
+		seq := make([]float64, seqLen+predLen)
+		for j := range seq {
+			seq[j] = start + float64(j)*step
+		}
+		inputs[i] = makeSeqFeatures(seq[:seqLen])
+		targets[i] = seq[seqLen:]
+	}
+	return inputs, targets
+}
+
+// makeSeqFeatures constructs feature vector: raw values, differences, positions, quadratic
+func makeSeqFeatures(x []float64) []float64 {
+	n := len(x)
+	// allocate capacity: n raw + (n-1) diffs + n positions + n squares
+	feat := make([]float64, 0, n*4-1)
+	// raw values
+	feat = append(feat, x...)
+	// pairwise diffs
+	for i := 1; i < n; i++ {
+		feat = append(feat, x[i]-x[i-1])
+	}
+	// positions 1..n
+	for i := 0; i < n; i++ {
+		feat = append(feat, float64(i+1))
+	}
+	// quadratic
+	for _, v := range x {
+		feat = append(feat, v*v)
+	}
+	return feat
+}
+
 //////////////////////////
 // Database Table Setup //
 //////////////////////////
@@ -250,9 +292,17 @@ func main() {
 	learnA := flag.String("learnA", "", "Correct answer for learnQ (one‑off)")
 	agentSaveInterval := flag.Int("agent-save-interval", 5, "Save agent model every N feedback updates (agent mode)")
 	validationSplit := flag.Float64("validation-split", 0.2, "Fraction of data to use for validation")
-	patience := flag.Int("patience", 100, "Number of epochs to wait for improvement before stopping")
+	patience := flag.Int("p", 100, "Number of epochs to wait for improvement before stopping")
+	nSamples := flag.Int("n", 10000, "number of training samples")
+	seqLen := flag.Int("seq", 5, "length of input sequence")
+	predLen := flag.Int("pred", 5, "length of prediction sequence")
+	hiddenSize := flag.Int("h", 200, "number of hidden neurons")
+	lambda := flag.Float64("lambda", 1e-4, "ridge regularization parameter")
+	seed := flag.Int64("seed", 42, "random seed for reproducibility")
 
 	flag.Parse()
+	// Initialize a local RNG instead of using the global one
+	rng = rand.New(rand.NewSource(*seed))
 
 	dbConn := db.ConnectDB()
 	defer dbConn.Close()
@@ -899,6 +949,42 @@ func main() {
 			} else {
 				fmt.Println("Final agent model saved successfully.")
 			}
+		}
+	case "countBySteps":
+		// Generate and split data
+		allX, allY := generateArithData(*nSamples, *seqLen, *predLen)
+		valSize := *nSamples / 5
+		valX := allX[:valSize]
+		valY := allY[:valSize]
+		trainX := allX[valSize:]
+		trainY := allY[valSize:]
+
+		// Initialize and train ELM
+		inputSize := len(trainX[0])
+		elmModel := elm.NewELM(inputSize, *hiddenSize, *predLen, 0, *lambda)
+		elmModel.Train(trainX, trainY, valX, valY, *patience)
+
+		// Test on fixed sequences (no randomness here), length based on seqLen
+		seqLenVal := *seqLen
+		tests := make([][]float64, 0, 2)
+		// Sequence with step 1: 1,2,...
+		seqA := make([]float64, seqLenVal)
+		// Sequence with step 2: 2,4,...
+		seqB := make([]float64, seqLenVal)
+		for i := 0; i < seqLenVal; i++ {
+			seqA[i] = float64(1 + i*1)
+			seqB[i] = float64(2 + i*2)
+		}
+		tests = append(tests, seqA, seqB)
+
+		for _, seq := range tests {
+			feat := makeSeqFeatures(seq)
+			pred := elmModel.Predict(feat)
+			fmt.Printf("Input: %v\nPred:  ", seq)
+			for _, v := range pred {
+				fmt.Printf("%.2f ", v)
+			}
+			fmt.Println("\n---")
 		}
 
 	default:

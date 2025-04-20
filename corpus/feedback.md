@@ -7,3 +7,6 @@
 ## Q: variables in golang
  A: slices 
 
+## Q: goroutines
+ A: a lightweight, concurrent execution unit managed by the Go runtime, rather than the operating system
+

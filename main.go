@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/infiniteCrank/mathbot/NeuralNetwork"
 	qaelm "github.com/infiniteCrank/mathbot/agent"
 	"github.com/infiniteCrank/mathbot/db"
 	"github.com/infiniteCrank/mathbot/elm"
@@ -22,6 +21,42 @@ import (
 
 // rng is the random number generator for reproducible sequences
 var rng *rand.Rand
+
+///////////////////////////
+//GENERATE TRAINING DATA //
+///////////////////////////
+
+// makeTestSeq creates an arithmetic sequence of given length and step
+func makeTestSeq(start float64, step float64, length int) []float64 {
+	seq := make([]float64, length)
+	for i := 0; i < length; i++ {
+		seq[i] = start + float64(i)*step
+	}
+	return seq
+}
+
+// generateDataset is the existing helper for simple math functions.
+func generateDataset(funcType string, samples int) ([][]float64, [][]float64) {
+	inputs := make([][]float64, samples)
+	outputs := make([][]float64, samples)
+
+	for i := 0; i < samples; i++ {
+		x := rand.Float64() * 2 * math.Pi // Range: [0, 2π]
+		inputs[i] = []float64{x}
+
+		var y float64
+		if funcType == "sin" {
+			y = math.Sin(x)
+		} else if funcType == "exp" {
+			y = math.Exp(x)
+		} else {
+			y = 0
+		}
+		outputs[i] = []float64{y}
+	}
+
+	return inputs, outputs
+}
 
 // generateArithData creates nSamples of arithmetic sequences with random start and step
 func generateArithData(nSamples, seqLen, predLen int) ([][]float64, [][]float64) {
@@ -127,6 +162,19 @@ func dropTables(db *sql.DB) error {
 // Utility Functions   //
 /////////////////////////
 
+// argMax returns the index of the maximum value in a slice.
+func argMax(slice []float64) int {
+	maxIdx := 0
+	maxVal := slice[0]
+	for i, v := range slice {
+		if v > maxVal {
+			maxVal = v
+			maxIdx = i
+		}
+	}
+	return maxIdx
+}
+
 // parseInput parses a comma-separated list of numbers from a string.
 func parseInput(inputStr string) ([]float64, error) {
 	parts := strings.Split(inputStr, ",")
@@ -165,29 +213,6 @@ func listModels(dbConn *sql.DB) error {
 			id, modelType, inputSize, hiddenSize, outputSize, activation, regularization, rmse)
 	}
 	return nil
-}
-
-// generateDataset is the existing helper for simple math functions.
-func generateDataset(funcType string, samples int) ([][]float64, [][]float64) {
-	inputs := make([][]float64, samples)
-	outputs := make([][]float64, samples)
-
-	for i := 0; i < samples; i++ {
-		x := rand.Float64() * 2 * math.Pi // Range: [0, 2π]
-		inputs[i] = []float64{x}
-
-		var y float64
-		if funcType == "sin" {
-			y = math.Sin(x)
-		} else if funcType == "exp" {
-			y = math.Exp(x)
-		} else {
-			y = 0
-		}
-		outputs[i] = []float64{y}
-	}
-
-	return inputs, outputs
 }
 
 //////////////////////////
@@ -365,109 +390,6 @@ func main() {
 	}
 
 	switch *mode {
-	case "sequence":
-		// Sequence prediction using generateArithData and NeuralNetwork
-		fmt.Println("Generating arithmetic training data…")
-		inputs, targets := generateArithData(*nSamples, *seqLen, *predLen)
-
-		// Shuffle dataset
-		rand.Shuffle(len(inputs), func(i, j int) {
-			inputs[i], inputs[j] = inputs[j], inputs[i]
-			targets[i], targets[j] = targets[j], targets[i]
-		})
-
-		// Normalize by max absolute value
-		maxVal := 0.0
-		for i := range inputs {
-			for _, v := range inputs[i] {
-				if abs := math.Abs(v); abs > maxVal {
-					maxVal = abs
-				}
-			}
-			for _, v := range targets[i] {
-				if abs := math.Abs(v); abs > maxVal {
-					maxVal = abs
-				}
-			}
-		}
-		if maxVal == 0 {
-			maxVal = 1
-		}
-		for i := range inputs {
-			for j := range inputs[i] {
-				inputs[i][j] /= maxVal
-			}
-			for j := range targets[i] {
-				targets[i][j] /= maxVal
-			}
-		}
-
-		// Build and train the network with correct input dimension: feature length
-		inputDim := len(inputs[0])
-		nn := NeuralNetwork.NewNeuralNetwork(
-			[]int{inputDim, 32, 16, *predLen},
-			[]int{
-				NeuralNetwork.TanhActivation,
-				NeuralNetwork.TanhActivation,
-				NeuralNetwork.IdentityActivation,
-			},
-			0.005, 1e-4,
-		)
-
-		fmt.Println("Training sequence model…")
-		nn.Train(inputs, targets, 500, 0.9, 1000, 16)
-		fmt.Println("Training completed.")
-
-		// Sample predictions for common patterns (denormalize)
-		tests := [][]float64{
-			{1, 2, 3, 4, 5},
-			{2, 4, 6, 8, 10},
-			{12, 24, 36, 48, 60},
-		}
-		for _, raw := range tests {
-			// Convert to feature vector
-			feat := makeSeqFeatures(raw)
-			// Normalize features
-			for i := range feat {
-				feat[i] /= maxVal
-			}
-			// Predict and denormalize outputs
-			predNorm := nn.PredictRegression(feat)
-			for i := range predNorm {
-				predNorm[i] *= maxVal
-			}
-			fmt.Printf("Input %v → Prediction %v\n", raw, predNorm)
-		}
-	case "combineTech":
-		// Generate dataset for sine wave example
-		trainInputs, trainOutputs := generateDataset("sin", 100000)
-		// Initialize a new ELM to transform the input
-		elmModel := elm.NewELM(1, 20, 1, 0, 0.01)
-		fmt.Println("Training ELM model on sine data...")
-		elmModel.Train(trainInputs, trainOutputs, nil, nil) // No validation dataset for the ELM training
-		fmt.Println("ELM training completed.")
-
-		// Transform training data using the trained ELM
-		transformedFeatures := make([][]float64, len(trainInputs))
-		for i, input := range trainInputs {
-			transformedFeatures[i] = elmModel.HiddenLayer(input)
-		}
-
-		// Define a neural network structure for further processing
-		layerSizes := []int{20, 20, 1}                                                            // Example: Hidden layer sizes for the NN
-		activations := []int{NeuralNetwork.LeakyReLUActivation, NeuralNetwork.IdentityActivation} // Activation functions
-		nnModel := NeuralNetwork.NewNeuralNetwork(layerSizes, activations, 0.00001, 0.01)         // Neural network initialization
-		fmt.Println("Training neural network model on transformed features...")
-		nnModel.Train(transformedFeatures, trainOutputs, 1000, 0.95, 100, 32) // Training the neural network
-		fmt.Println("Neural network training completed.")
-
-		// Evaluate the combined model on a new set of test inputs
-		testInputs, _ := generateDataset("sin", 100) // Generate new test data
-		for _, input := range testInputs {
-			transformed := elmModel.HiddenLayer(input)                           // Transform the test input using the ELM model
-			predicted := nnModel.PredictRegression(transformed)                  // Make a prediction with the NN model
-			fmt.Printf("Input: %.2f, Predicted: %.4f\n", input[0], predicted[0]) // Display the input and the prediction
-		}
 
 	case "protein":
 		windowSize := 15
@@ -1064,26 +986,4 @@ func main() {
 	default:
 		fmt.Println("Invalid mode. Use -mode with one of: addnew, addpredict, addTrain, countnew, countpredict, countingTrain, combineTech, protein, list, or drop")
 	}
-}
-
-// makeTestSeq creates an arithmetic sequence of given length and step
-func makeTestSeq(start float64, step float64, length int) []float64 {
-	seq := make([]float64, length)
-	for i := 0; i < length; i++ {
-		seq[i] = start + float64(i)*step
-	}
-	return seq
-}
-
-// argMax returns the index of the maximum value in a slice.
-func argMax(slice []float64) int {
-	maxIdx := 0
-	maxVal := slice[0]
-	for i, v := range slice {
-		if v > maxVal {
-			maxVal = v
-			maxIdx = i
-		}
-	}
-	return maxIdx
 }

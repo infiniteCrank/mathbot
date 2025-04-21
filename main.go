@@ -283,7 +283,7 @@ func generateProteinDataset(windowSize int) ([][]float64, [][]float64) {
 func main() {
 
 	// Supported modes: addnew, addpredict, addTrain, countnew, countpredict, countingTrain, combineTech, protein, list, drop.
-	mode := flag.String("mode", "addnew", "Mode: 'addnew', 'addpredict', 'addTrain', 'countnew', 'countpredict', 'countingTrain', 'combineTech', 'protein', 'list', or 'drop'")
+	mode := flag.String("mode", "addnew", "Mode: 'addnew','addpredict','addTrain','countnew','countpredict','countingTrain','combineTech','protein','list','drop','sequence'")
 	modelID := flag.Int("id", 0, "Model ID for load/predict/retrain (used with addpredict, addTrain, countpredict, countingTrain, or list)")
 	inputStr := flag.String("input", "", "Comma-separated list of numbers as input (used in prediction modes)")
 	filename := flag.String("filename", "", "Path to the model file for import")
@@ -365,6 +365,79 @@ func main() {
 	}
 
 	switch *mode {
+	case "sequence":
+		// Sequence prediction using generateArithData and NeuralNetwork
+		fmt.Println("Generating arithmetic training data…")
+		inputs, targets := generateArithData(*nSamples, *seqLen, *predLen)
+
+		// Shuffle dataset
+		rand.Shuffle(len(inputs), func(i, j int) {
+			inputs[i], inputs[j] = inputs[j], inputs[i]
+			targets[i], targets[j] = targets[j], targets[i]
+		})
+
+		// Normalize by max absolute value
+		maxVal := 0.0
+		for i := range inputs {
+			for _, v := range inputs[i] {
+				if abs := math.Abs(v); abs > maxVal {
+					maxVal = abs
+				}
+			}
+			for _, v := range targets[i] {
+				if abs := math.Abs(v); abs > maxVal {
+					maxVal = abs
+				}
+			}
+		}
+		if maxVal == 0 {
+			maxVal = 1
+		}
+		for i := range inputs {
+			for j := range inputs[i] {
+				inputs[i][j] /= maxVal
+			}
+			for j := range targets[i] {
+				targets[i][j] /= maxVal
+			}
+		}
+
+		// Build and train the network with correct input dimension: feature length
+		inputDim := len(inputs[0])
+		nn := NeuralNetwork.NewNeuralNetwork(
+			[]int{inputDim, 32, 16, *predLen},
+			[]int{
+				NeuralNetwork.TanhActivation,
+				NeuralNetwork.TanhActivation,
+				NeuralNetwork.IdentityActivation,
+			},
+			0.005, 1e-4,
+		)
+
+		fmt.Println("Training sequence model…")
+		nn.Train(inputs, targets, 500, 0.9, 1000, 16)
+		fmt.Println("Training completed.")
+
+		// Sample predictions for common patterns (denormalize)
+		tests := [][]float64{
+			{1, 2, 3, 4, 5},
+			{2, 4, 6, 8, 10},
+			{12, 24, 36, 48, 60},
+		}
+		for _, raw := range tests {
+			// Convert to feature vector
+			feat := makeSeqFeatures(raw)
+			// Normalize features
+			for i := range feat {
+				feat[i] /= maxVal
+			}
+			// Predict and denormalize outputs
+			predNorm := nn.PredictRegression(feat)
+			for i := range predNorm {
+				predNorm[i] *= maxVal
+			}
+			fmt.Printf("Input %v → Prediction %v\n", raw, predNorm)
+		}
 	case "combineTech":
 		// Generate dataset for sine wave example
 		trainInputs, trainOutputs := generateDataset("sin", 100000)

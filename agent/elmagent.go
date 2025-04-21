@@ -125,7 +125,7 @@ func (a *ELMAgent) ReTrainModel() {
 	}
 
 	// Re-train the ELM with the aggregated training data.
-	a.model.Train(trainStates, trainTargets, nil, nil, 0)
+	a.model.Train(trainStates, trainTargets, nil, nil)
 
 	fmt.Printf("Re-trained ELM on %d samples\n", len(trainStates))
 }

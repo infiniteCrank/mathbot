@@ -315,12 +315,12 @@ func main() {
 	// new flags for one‑off teaching
 	learnQ := flag.String("learnQ", "", "Question to teach the agent (one‑off)")
 	learnA := flag.String("learnA", "", "Correct answer for learnQ (one‑off)")
-	agentSaveInterval := flag.Int("agent-save-interval", 5, "Save agent model every N feedback updates (agent mode)")
+	agentSaveInterval := flag.Int("agent-save-interval", 3, "Save agent model every N feedback updates (agent mode)")
 	validationSplit := flag.Float64("validation-split", 0.2, "Fraction of data to use for validation")
 	nSamples := flag.Int("n", 10000, "number of training samples")
 	seqLen := flag.Int("seq", 5, "length of input sequence")
 	predLen := flag.Int("pred", 5, "length of prediction sequence")
-	hiddenSize := flag.Int("h", 200, "number of hidden neurons")
+	hiddenSize := flag.Int("h", 1000, "number of hidden neurons")
 	lambda := flag.Float64("lambda", 1e-4, "ridge regularization parameter")
 	seed := flag.Int64("seed", 42, "random seed for reproducibility")
 
@@ -982,8 +982,194 @@ func main() {
 			}
 			fmt.Println("\n---")
 		}
+		// after your validation & (optional) SaveModel logic:
+		testGeneralization(elmModel, *seqLen, *predLen, 1000)
+
+		gridTest(elmModel, *seqLen, *predLen,
+			-5, 5, // start range
+			-2, 2, // step range
+			20, 20) // 20×20 grid
+
+		randomTest(elmModel, *seqLen, *predLen, 2000, -100, 100, -10, 10)
+
+		autoregTest(elmModel, *seqLen, *predLen, 1000, -5, 5, -2, 2)
+		autoregTest(elmModel, *seqLen, *predLen, 1000, -100, 100, -10, 10)
 
 	default:
 		fmt.Println("Invalid mode. Use -mode with one of: addnew, addpredict, addTrain, countnew, countpredict, countingTrain, combineTech, protein, list, or drop")
 	}
+}
+
+// testGeneralization runs out‑of‑sample arithmetic‐sequence tests
+// to measure how well the ELM learned the “by‑steps” rule.
+func testGeneralization(
+	model *elm.ELM,
+	seqLen, predLen, nTests int,
+) {
+	type caseDef struct{ start, step float64 }
+	var cases []caseDef
+
+	// 1. Build nTests random (start, step) pairs from a wide range
+	for i := 0; i < nTests; i++ {
+		cases = append(cases, caseDef{
+			start: rand.Float64()*200 - 100, // from –100 to +100
+			step:  rand.Float64()*20 - 10,   // from –10 to +10
+		})
+	}
+
+	var sumSq, sumAbs float64
+	var total int
+
+	for _, c := range cases {
+		// build the full truth sequence
+		seq := make([]float64, seqLen+predLen)
+		for i := range seq {
+			seq[i] = c.start + float64(i)*c.step
+		}
+
+		// 2. Single‐shot prediction (the same as your existing tests):
+		//    build features from the first seqLen, predict predLen in one go
+		pred := model.Predict(makeSeqFeatures(seq[:seqLen]))
+
+		// accumulate errors
+		for j := 0; j < predLen; j++ {
+			err := pred[j] - seq[seqLen+j]
+			sumSq += err * err
+			sumAbs += math.Abs(err)
+			total++
+		}
+
+		// 3. (Optional) autoregressive multi‐step forecasting:
+		//    uncomment if you want to see how errors grow when
+		//    feeding predictions back in step by step.
+
+		window := append([]float64{}, seq[:seqLen]...)
+		for j := 0; j < predLen; j++ {
+			p := model.Predict(makeSeqFeatures(window))[0]
+			err := p - seq[seqLen+j]
+			sumSq += err * err
+			sumAbs += math.Abs(err)
+			total++
+
+			// slide window
+			window = append(window[1:], p)
+		}
+
+	}
+
+	rmse := math.Sqrt(sumSq / float64(total))
+	mae := sumAbs / float64(total)
+	fmt.Printf(
+		"Generalization over %d cases (seqLen=%d, predLen=%d): RMSE=%.4f  MAE=%.4f\n",
+		total/predLen, seqLen, predLen, rmse, mae,
+	)
+}
+
+// gridTest runs a dense grid over [startMin,startMax]×[stepMin,stepMax]
+func gridTest(
+	model *elm.ELM,
+	seqLen, predLen int,
+	startMin, startMax float64,
+	stepMin, stepMax float64,
+	nStart, nStep int,
+) {
+	var sumSq, sumAbs float64
+	var count int
+
+	for i := 0; i < nStart; i++ {
+		start := startMin + (startMax-startMin)*float64(i)/float64(nStart-1)
+		for j := 0; j < nStep; j++ {
+			step := stepMin + (stepMax-stepMin)*float64(j)/float64(nStep-1)
+
+			// build the truth sequence
+			seq := make([]float64, seqLen+predLen)
+			for k := range seq {
+				seq[k] = start + float64(k)*step
+			}
+
+			// single‑shot predict
+			pred := model.Predict(makeSeqFeatures(seq[:seqLen]))
+			for k := 0; k < predLen; k++ {
+				err := pred[k] - seq[seqLen+k]
+				sumSq += err * err
+				sumAbs += math.Abs(err)
+				count++
+			}
+		}
+	}
+
+	rmse := math.Sqrt(sumSq / float64(count))
+	mae := sumAbs / float64(count)
+	fmt.Printf("Inside‑grid test (starts∈[%.1f,%.1f], steps∈[%.1f,%.1f]): RMSE=%.4f  MAE=%.4f\n",
+		startMin, startMax, stepMin, stepMax, rmse, mae)
+}
+
+func randomTest(
+	model *elm.ELM,
+	seqLen, predLen, nTests int,
+	startMin, startMax, stepMin, stepMax float64,
+) {
+	var sumSq, sumAbs float64
+	for i := 0; i < nTests; i++ {
+		start := rand.Float64()*(startMax-startMin) + startMin
+		step := rand.Float64()*(stepMax-stepMin) + stepMin
+
+		seq := make([]float64, seqLen+predLen)
+		for k := range seq {
+			seq[k] = start + float64(k)*step
+		}
+		pred := model.Predict(makeSeqFeatures(seq[:seqLen]))
+
+		for k := 0; k < predLen; k++ {
+			err := pred[k] - seq[seqLen+k]
+			sumSq += err * err
+			sumAbs += math.Abs(err)
+		}
+	}
+	count := float64(nTests * predLen)
+	fmt.Printf("Random‑test (%d cases from starts∈[%.0f,%.0f], steps∈[%.0f,%.0f]): RMSE=%.4f  MAE=%.4f\n",
+		nTests, startMin, startMax, stepMin, stepMax,
+		math.Sqrt(sumSq/count), sumAbs/count,
+	)
+}
+
+func autoregTest(
+	model *elm.ELM,
+	seqLen, predLen, nTests int,
+	startMin, startMax, stepMin, stepMax float64,
+) {
+	var sumSq, sumAbs float64
+	for i := 0; i < nTests; i++ {
+		start := rand.Float64()*(startMax-startMin) + startMin
+		step := rand.Float64()*(stepMax-stepMin) + stepMin
+
+		// build the initial window
+		window := make([]float64, seqLen)
+		for k := 0; k < seqLen; k++ {
+			window[k] = start + float64(k)*step
+		}
+
+		// truth for next predLen steps
+		truth := make([]float64, predLen)
+		for k := 0; k < predLen; k++ {
+			truth[k] = start + float64(seqLen+k)*step
+		}
+
+		// roll forward
+		for k := 0; k < predLen; k++ {
+			pred := model.Predict(makeSeqFeatures(window))[0]
+			err := pred - truth[k]
+			sumSq += err * err
+			sumAbs += math.Abs(err)
+
+			// slide window
+			window = append(window[1:], pred)
+		}
+	}
+	count := float64(nTests * predLen)
+	fmt.Printf("Autoregressive‑test (%d): RMSE=%.4f  MAE=%.4f\n",
+		nTests,
+		math.Sqrt(sumSq/count),
+		sumAbs/count,
+	)
 }

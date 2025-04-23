@@ -4,9 +4,6 @@
 ## Q: variables 
  A:   var myVar type or var myVar = "" or myVar:=""
 
-## Q: variables in golang
- A: slices 
-
 ## Q: goroutines
  A: a lightweight, concurrent execution unit managed by the Go runtime, rather than the operating system
 
@@ -25,9 +22,15 @@
 ## Q: variables in go
  A:  var myVar type or var myVar = "" or myVar:=""
 
-## Q: How do you manage goroutine lifecycle?
- A: How do interfaces work in Go?
+## Q: how do i define a variable in go 
+ A:  var myVar type or var myVar = "" or myVar:=""
 
-## Q: How do interfaces work in Go?
- A: How do interfaces work in Go?
+## Q: concurency in go
+ A: concurrency refers to the ability of a program to manage multiple tasks seemingly at the same time, without necessarily executing them simultaneously on multiple CPU cores
+
+## Q: context and cancellation
+ A: Use the context.Context for managing deadlines and cancellation
+
+## Q: functions
+ A: Functions in Go are blocks of code designed to perform specific tasks. They are a fundamental part of Go programming, promoting code reusability, readability, and modularity
 

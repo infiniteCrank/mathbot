@@ -940,7 +940,7 @@ func main() {
 
 		// Train ELM
 		inputSize := len(trainX[0])
-		elmModel := elm.NewELM(inputSize, *hiddenSize, *predLen, 0, *lambda)
+		elmModel := elm.NewELM(inputSize, *hiddenSize, *predLen, 1, *lambda)
 		elmModel.Train(trainX, trainY, valX, valY)
 
 		// Compute validation RMSE

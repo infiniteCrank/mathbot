@@ -995,50 +995,6 @@ func main() {
 
 		autoregTest(elmModel, *seqLen, *predLen, 1000, -5, 5, -2, 2)
 		autoregTest(elmModel, *seqLen, *predLen, 1000, -100, 100, -10, 10)
-	case "neuralNetwork":
-		// Generate training data
-		inputs, targets := generateArithData(*nSamples, *seqLen, *predLen)
-
-		// Neural Network initialization
-		layerSizes := []int{*seqLen*4 - 1, *hiddenSize, *hiddenSize / 2, *predLen}
-		activations := []int{NeuralNetwork.TanhActivation, NeuralNetwork.ReLUActivation, NeuralNetwork.IdentityActivation}
-		learningRate := 0.001 // Set a smaller learning rate for stability
-		l2Regularization := *lambda
-
-		// Create a new neural network
-		nn := NeuralNetwork.NewNeuralNetwork(layerSizes, activations, learningRate, l2Regularization)
-
-		// Train the model
-		iterations := 1000
-		learningRateDecayFactor := 0.99
-		decayEpochs := 100
-		miniBatchSize := 32
-
-		// Training process
-		for i := 0; i < iterations; i++ {
-			nn.Train(inputs, targets, 1, learningRateDecayFactor, decayEpochs, miniBatchSize)
-
-			// Calculate average loss every 100 iterations
-			if i%100 == 0 {
-				totalLoss := 0.0
-				for b := 0; b < *nSamples; b++ {
-					current := inputs[b]
-					outputs := nn.PredictRegression(current)
-
-					// Calculate individual errors for the loss
-					for j := range targets[b] {
-						totalLoss += 0.5 * math.Pow(targets[b][j]-outputs[j], 2)
-					}
-				}
-				avgLoss := totalLoss / float64(*nSamples)
-				fmt.Printf("Iteration %d: Average Loss: %.4f\n", i, avgLoss)
-			}
-		}
-
-		// Test the model's generalization capabilities
-		testGeneralizationNN(nn, *seqLen, *predLen, 100) // Test with 100 cases for generalization
-
-		fmt.Println("Training and testing completed.")
 
 	default:
 		fmt.Println("Invalid mode. Use -mode with one of: addnew, addpredict, addTrain, countnew, countpredict, countingTrain, combineTech, protein, list, or drop")

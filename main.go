@@ -11,7 +11,9 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
+	neuralnetwork "github.com/infiniteCrank/mathbot/NeuralNetwork"
 	qaelm "github.com/infiniteCrank/mathbot/agent"
 	"github.com/infiniteCrank/mathbot/db"
 	"github.com/infiniteCrank/mathbot/elm"
@@ -994,10 +996,44 @@ func main() {
 
 		autoregTest(elmModel, *seqLen, *predLen, 1000, -5, 5, -2, 2)
 		autoregTest(elmModel, *seqLen, *predLen, 1000, -100, 100, -10, 10)
+	case "neuroNetwork":
+		rand.Seed(time.Now().UnixNano())
+		seqLen, predLen := 5, 5
+		nSamples := 1000
+		trainFrac := 0.8
 
+		// Generate and split data
+		X, Y := generateArithData(nSamples, seqLen, predLen)
+		nTrain := int(trainFrac * float64(nSamples))
+		trainX, trainY := X[:nTrain], Y[:nTrain]
+		valX, valY := X[nTrain:], Y[nTrain:]
+
+		// Fit scalers & normalize
+		xMeans, xStds := neuralnetwork.FitScaler(trainX)
+		yMeans, yStds := neuralnetwork.FitScaler(trainY)
+		trainX = neuralnetwork.Normalize(trainX, xMeans, xStds)
+		valX = neuralnetwork.Normalize(valX, xMeans, xStds)
+		trainY = neuralnetwork.Normalize(trainY, yMeans, yStds)
+		valY = neuralnetwork.Normalize(valY, yMeans, yStds)
+
+		// Build, train, and validate
+		inputDim := len(trainX[0])
+		nn := neuralnetwork.NewNetwork([]int{inputDim, 64, 64, predLen}, 0.01, 100, 32, 10)
+		nn.Train(trainX, trainY, valX, valY)
+
+		// Test on a new 1,3,5,7,9 sequence
+		testSeq := []float64{1, 3, 5, 7, 9}
+		testFeat := makeSeqFeatures(testSeq)
+		tn := neuralnetwork.Normalize([][]float64{testFeat}, xMeans, xStds)[0]
+		predNorm := nn.Predict(tn)
+		pred := neuralnetwork.Denormalize(predNorm, yMeans, yStds)
+
+		fmt.Printf("Input: %v\n", testSeq)
+		fmt.Printf("Predicted next %d: %v\n", predLen, pred)
 	default:
 		fmt.Println("Invalid mode. Use -mode with one of: addnew, addpredict, addTrain, countnew, countpredict, countingTrain, combineTech, protein, list, or drop")
 	}
+
 }
 
 // testGeneralization runs out‑of‑sample arithmetic‐sequence tests

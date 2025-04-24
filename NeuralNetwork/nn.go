@@ -253,7 +253,7 @@ func makeSeqFeatures(x []float64) []float64 {
 }
 
 // normalization (z-score)
-func fitScaler(data [][]float64) (means, stds []float64) {
+func FitScaler(data [][]float64) (means, stds []float64) {
 	nFeatures := len(data[0])
 	means = make([]float64, nFeatures)
 	stds = make([]float64, nFeatures)
@@ -274,7 +274,7 @@ func fitScaler(data [][]float64) (means, stds []float64) {
 	return
 }
 
-func normalize(data [][]float64, means, stds []float64) [][]float64 {
+func Normalize(data [][]float64, means, stds []float64) [][]float64 {
 	norm := make([][]float64, len(data))
 	for i := range data {
 		norm[i] = make([]float64, len(data[i]))
@@ -285,7 +285,7 @@ func normalize(data [][]float64, means, stds []float64) [][]float64 {
 	return norm
 }
 
-func denormalize(vec, means, stds []float64) []float64 {
+func Denormalize(vec, means, stds []float64) []float64 {
 	down := make([]float64, len(vec))
 	for i := range vec {
 		down[i] = vec[i]*stds[i] + means[i]

@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/infiniteCrank/mathbot/NeuralNetwork"
 	qaelm "github.com/infiniteCrank/mathbot/agent"
 	"github.com/infiniteCrank/mathbot/db"
 	"github.com/infiniteCrank/mathbot/elm"
@@ -999,45 +998,6 @@ func main() {
 	default:
 		fmt.Println("Invalid mode. Use -mode with one of: addnew, addpredict, addTrain, countnew, countpredict, countingTrain, combineTech, protein, list, or drop")
 	}
-}
-
-// Test model generalization
-func testGeneralizationNN(model *NeuralNetwork.NeuralNetwork, seqLen, predLen, nTests int) {
-	type caseDef struct{ start, step float64 }
-	var cases []caseDef
-
-	for i := 0; i < nTests; i++ {
-		cases = append(cases, caseDef{
-			start: rand.Float64()*200 - 100, // from –100 to +100
-			step:  rand.Float64()*20 - 10,   // from –10 to +10
-		})
-	}
-
-	var sumSq, sumAbs float64
-	var total int
-
-	for _, c := range cases {
-		seq := make([]float64, seqLen+predLen)
-		for i := range seq {
-			seq[i] = c.start + float64(i)*c.step
-		}
-
-		pred := model.PredictRegression(makeSeqFeatures(seq[:seqLen]))
-
-		for j := 0; j < predLen; j++ {
-			err := pred[j] - seq[seqLen+j]
-			sumSq += err * err
-			sumAbs += math.Abs(err)
-			total++
-		}
-	}
-
-	rmse := math.Sqrt(sumSq / float64(total))
-	mae := sumAbs / float64(total)
-	fmt.Printf(
-		"Generalization over %d cases (seqLen=%d, predLen=%d): RMSE=%.4f  MAE=%.4f\n",
-		total/predLen, seqLen, predLen, rmse, mae,
-	)
 }
 
 // testGeneralization runs out‑of‑sample arithmetic‐sequence tests

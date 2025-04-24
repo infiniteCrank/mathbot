@@ -431,3 +431,26 @@ func ImportModelFromFile(filename string) (*ELM, error) {
 	}
 	return elm, nil // Return the imported ELM model
 }
+
+// CalculateMSE computes the mean squared error for the full vectors.
+func CalculateMSE(outputs []float64, targets []float64) float64 {
+	mse := 0.0
+	for i := 0; i < len(outputs) && i < len(targets); i++ {
+		mse += 0.5 * math.Pow(targets[i]-outputs[i], 2)
+	}
+	return mse
+}
+
+// CalculateRMSE computes the Root Mean Squared Error.
+func CalculateRMSE(predictions, targets []float64) float64 {
+	return math.Sqrt(CalculateMSE(predictions, targets))
+}
+
+// CalculateMAE computes the Mean Absolute Error.
+func CalculateMAE(predictions, targets []float64) float64 {
+	mae := 0.0
+	for i := range predictions {
+		mae += math.Abs(targets[i] - predictions[i])
+	}
+	return mae / float64(len(predictions))
+}

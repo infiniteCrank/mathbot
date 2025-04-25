@@ -1,572 +1,361 @@
-package NeuralNetwork
+package neuralnetwork
 
 import (
-	"context"
-	"database/sql"
 	"fmt"
-	"log"
 	"math"
-	"math/rand"
-	"time"
-
-	"github.com/infiniteCrank/mathbot/db"
+	"math/rand/v2"
 )
 
-// Activation Function Types
-const (
-	SigmoidActivation = iota
-	ReLUActivation
-	TanhActivation
-	LeakyReLUActivation
-	SoftmaxActivation  // For classification tasks
-	IdentityActivation // For regression tasks: output = weighted sum (i.e. linear)
-)
-
-// Adam hyperparameters (tunable)
-const (
-	beta1   = 0.9
-	beta2   = 0.999
-	epsilon = 1e-8
-)
-
-// Activation functions
-
-func sigmoid(x float64) float64 {
-	return 1 / (1 + math.Exp(-x))
-}
-
-func sigmoidDerivative(x float64) float64 {
-	return x * (1 - x)
-}
-
-func relu(x float64) float64 {
-	if x < 0 {
-		return 0
-	}
-	return x
-}
-
-func reluDerivative(x float64) float64 {
-	if x > 0 {
-		return 1
-	}
-	return 0
-}
-
-func tanh(x float64) float64 {
-	return math.Tanh(x)
-}
-
-func tanhDerivative(x float64) float64 {
-	return 1 - x*x
-}
-
-func leakyReLU(x float64) float64 {
-	if x < 0 {
-		return 0.01 * x
-	}
-	return x
-}
-
-func leakyReLUDerivative(x float64) float64 {
-	if x < 0 {
-		return 0.01
-	}
-	return 1
-}
-
-// Softmax activation for a vector input.
-func softmax(logits []float64) []float64 {
-	expScores := make([]float64, len(logits))
-	sumExpScores := 0.0
-	for i, score := range logits {
-		expScores[i] = math.Exp(score)
-		sumExpScores += expScores[i]
-	}
-	for i := range expScores {
-		expScores[i] /= sumExpScores
-	}
-	return expScores
-}
-
-// Layer structure
-type Layer struct {
-	inputs     int
-	outputs    int
-	weights    [][]float64 // shape: inputs x outputs
-	biases     []float64   // length: outputs
-	activation int
-	gamma      []float64 // for batch normalization (scale)
-	beta       []float64 // for batch normalization (shift)
-
-	// Adam optimizer parameters for weights and biases:
-	weightM [][]float64 // First moment estimates for weights
-	weightV [][]float64 // Second moment estimates for weights
-	biasM   []float64   // First moment estimates for biases
-	biasV   []float64   // Second moment estimates for biases
-}
-
-// NewLayer creates and initializes a new layer.
-func NewLayer(inputs, outputs int, activation int) *Layer {
-	weights := make([][]float64, inputs)
-	weightM := make([][]float64, inputs)
-	weightV := make([][]float64, inputs)
-	for i := range weights {
-		weights[i] = make([]float64, outputs)
-		weightM[i] = make([]float64, outputs)
-		weightV[i] = make([]float64, outputs)
-		for j := range weights[i] {
-			// Scale down the initialization to help training stability.
-			weights[i][j] = rand.NormFloat64() * 0.01
-			weightM[i][j] = 0.0
-			weightV[i][j] = 0.0
-		}
-	}
-
-	biases := make([]float64, outputs)
-	biasM := make([]float64, outputs)
-	biasV := make([]float64, outputs)
-	for j := range biases {
-		biases[j] = 0.0
-		biasM[j] = 0.0
-		biasV[j] = 0.0
-	}
-
-	gamma := make([]float64, outputs)
-	beta := make([]float64, outputs)
-	for j := range gamma {
-		gamma[j] = 1.0
-		beta[j] = 0.0
-	}
-
-	return &Layer{
-		inputs:     inputs,
-		outputs:    outputs,
-		weights:    weights,
-		biases:     biases,
-		activation: activation,
-		gamma:      gamma,
-		beta:       beta,
-		weightM:    weightM,
-		weightV:    weightV,
-		biasM:      biasM,
-		biasV:      biasV,
-	}
-}
-
-// Forward processes a single sample through the layer.
-func (l *Layer) Forward(input []float64, training bool) ([]float64, []float64, []float64) {
-	outputs := make([]float64, l.outputs)
-	// Compute weighted sums.
-	for j := 0; j < l.outputs; j++ {
-		sum := 0.0
-		for i := 0; i < l.inputs; i++ {
-			sum += input[i] * l.weights[i][j]
-		}
-		sum += l.biases[j]
-		outputs[j] = sum
-	}
-
-	// For training with mini-batch we usually use ForwardBatch, but for a single sample, skip batch norm.
-	if !training {
-		for j := 0; j < l.outputs; j++ {
-			outputs[j] = l.gamma[j]*outputs[j] + l.beta[j]
-		}
-	}
-
-	// Apply activation function.
-	for j := 0; j < l.outputs; j++ {
-		switch l.activation {
-		case SigmoidActivation:
-			outputs[j] = sigmoid(outputs[j])
-		case ReLUActivation:
-			outputs[j] = relu(outputs[j])
-		case TanhActivation:
-			outputs[j] = tanh(outputs[j])
-		case LeakyReLUActivation:
-			outputs[j] = leakyReLU(outputs[j])
-		case SoftmaxActivation:
-			// Softmax should be applied to the whole vector later.
-		case IdentityActivation:
-			// Identity: do nothing.
-		}
-	}
-
-	// For consistency, returning nil for batch stats.
-	return outputs, nil, nil
-}
-
-// ForwardBatch processes a batch of samples through the layer.
-// inputs is a slice of samples, each sample being a slice of float64.
-func (l *Layer) ForwardBatch(inputs [][]float64, training bool) ([][]float64, []float64, []float64) {
-	batchSize := len(inputs)
-	outputs := make([][]float64, batchSize)
-	for b, input := range inputs {
-		out := make([]float64, l.outputs)
-		for j := 0; j < l.outputs; j++ {
-			sum := 0.0
-			for i := 0; i < l.inputs; i++ {
-				sum += input[i] * l.weights[i][j]
-			}
-			sum += l.biases[j]
-			out[j] = sum
-		}
-		outputs[b] = out
-	}
-
-	var batchMeans, batchVariances []float64
-	// If training and the layer is not using Identity activation, apply batch normalization.
-	if training && l.activation != IdentityActivation {
-		batchMeans = make([]float64, l.outputs)
-		batchVariances = make([]float64, l.outputs)
-		// Compute mean for each neuron over the batch.
-		for j := 0; j < l.outputs; j++ {
-			sum := 0.0
-			for b := 0; b < batchSize; b++ {
-				sum += outputs[b][j]
-			}
-			mean := sum / float64(batchSize)
-			batchMeans[j] = mean
-		}
-		// Compute variance for each neuron over the batch.
-		for j := 0; j < l.outputs; j++ {
-			sumSq := 0.0
-			for b := 0; b < batchSize; b++ {
-				diff := outputs[b][j] - batchMeans[j]
-				sumSq += diff * diff
-			}
-			batchVariances[j] = sumSq / float64(batchSize)
-		}
-		// Normalize outputs using the computed batch statistics.
-		for b := 0; b < batchSize; b++ {
-			for j := 0; j < l.outputs; j++ {
-				outputs[b][j] = l.gamma[j]*(outputs[b][j]-batchMeans[j])/math.Sqrt(batchVariances[j]+1e-8) + l.beta[j]
-			}
-		}
-	} else {
-		// If not training or if IdentityActivation is used, simply apply gamma and beta.
-		for b := 0; b < batchSize; b++ {
-			for j := 0; j < l.outputs; j++ {
-				outputs[b][j] = l.gamma[j]*outputs[b][j] + l.beta[j]
-			}
-		}
-	}
-
-	// Apply activation function to each output element.
-	for b := 0; b < batchSize; b++ {
-		for j := 0; j < l.outputs; j++ {
-			switch l.activation {
-			case SigmoidActivation:
-				outputs[b][j] = sigmoid(outputs[b][j])
-			case ReLUActivation:
-				outputs[b][j] = relu(outputs[b][j])
-			case TanhActivation:
-				outputs[b][j] = tanh(outputs[b][j])
-			case LeakyReLUActivation:
-				outputs[b][j] = leakyReLU(outputs[b][j])
-			case SoftmaxActivation:
-				// Softmax will be applied to the entire vector later.
-			case IdentityActivation:
-				// For identity activation, leave the output as is.
-			}
-		}
-	}
-
-	return outputs, batchMeans, batchVariances
-}
-
-// calculateError computes mean squared error for a given sample.
-func calculateError(outputs []float64, targets []float64) float64 {
-	error := 0.0
-	for i := range outputs {
-		error += 0.5 * math.Pow(targets[i]-outputs[i], 2)
-	}
-	return error
-}
-
-// NeuralNetwork structure
+// NeuralNetwork: fully-connected feedforward network with backprop, SGD, early stopping, and LR scheduling.
 type NeuralNetwork struct {
-	Layers           []*Layer
-	learningRate     float64
-	l2Regularization float64
+	LayerSizes      []int // sizes for each layer
+	NumLayers       int   // number of layers
+	Weights         [][][]float64
+	Biases          [][]float64
+	LearningRate    float64
+	Epochs          int
+	BatchSize       int
+	InitialPatience int // initial early stopping patience
+	patienceCounter int // countdown
+	BestValLoss     float64
+	TrainLosses     []float64 // record of training losses
+	ValLosses       []float64 // record of validation losses
 }
 
-// NewNeuralNetwork initializes a neural network.
-// layerSizes is a slice of integers indicating the number of neurons in each layer.
-// activations is a slice of activation types for each layer except the input layer.
-func NewNeuralNetwork(layerSizes []int, activations []int, learningRate float64, l2Regularization float64) *NeuralNetwork {
-	nn := &NeuralNetwork{learningRate: learningRate, l2Regularization: l2Regularization}
-	for i := 0; i < len(layerSizes)-1; i++ {
-		nn.Layers = append(nn.Layers, NewLayer(layerSizes[i], layerSizes[i+1], activations[i]))
+// NewNetwork: initialize weights & biases with Xavier init, set patience
+func NewNetwork(sizes []int, lr float64, epochs, batchSize, patience int) *NeuralNetwork {
+	nn := &NeuralNetwork{
+		LayerSizes:      append([]int(nil), sizes...),
+		NumLayers:       len(sizes),
+		LearningRate:    lr,
+		Epochs:          epochs,
+		BatchSize:       batchSize,
+		InitialPatience: patience,
+		BestValLoss:     math.Inf(1),
+		TrainLosses:     make([]float64, 0, epochs),
+		ValLosses:       make([]float64, 0, epochs),
+	}
+	// initialize counters
+	nn.patienceCounter = patience
+
+	nn.Weights = make([][][]float64, nn.NumLayers-1)
+	nn.Biases = make([][]float64, nn.NumLayers-1)
+	// Xavier initialization
+	for l := 0; l < nn.NumLayers-1; l++ {
+		in, out := sizes[l], sizes[l+1]
+		limit := math.Sqrt(6.0 / float64(in+out))
+		nn.Weights[l] = make([][]float64, out)
+		for i := 0; i < out; i++ {
+			nn.Weights[l][i] = make([]float64, in)
+			for j := 0; j < in; j++ {
+				nn.Weights[l][i][j] = rand.Float64()*2*limit - limit
+			}
+		}
+		// biases init to zero
+		nn.Biases[l] = make([]float64, out)
 	}
 	return nn
 }
 
-// PredictRegression performs a forward pass on a single sample (without softmax on the output layer).
-// This method is exported for inference.
-func (nn *NeuralNetwork) PredictRegression(input []float64) []float64 {
-	currentOutput := input
-	for _, layer := range nn.Layers {
-		out, _, _ := layer.Forward(currentOutput, false)
-		currentOutput = out
-	}
-	return currentOutput
+// Activation and derivative
+func sigmoid(x float64) float64 { return 1.0 / (1.0 + math.Exp(-x)) }
+func sigmoidPrime(x float64) float64 {
+	s := sigmoid(x)
+	return s * (1 - s)
 }
 
-// Simple clip function to cap the gradient value (optional fix).
-func clip(x float64, threshold float64) float64 {
-	if math.Abs(x) > threshold {
-		if x > 0 {
-			return threshold
-		}
-		return -threshold
-	}
-	return x
-}
-
-// Train trains the neural network using mini-batch gradient descent with Adam optimizer.
-// It logs the average training loss every printEvery iterations and implements a patience mechanism for early stopping.
-// Updated Train trains the network using mini-batch gradient descent with Adam.
-func (nn *NeuralNetwork) Train(inputs [][]float64, targets [][]float64, iterations int,
-	learningRateDecayFactor float64, decayEpochs int, miniBatchSize int) {
-
-	totalSamples := len(inputs)
-	printEvery := 100 // Adjust as desired
-
-	// Patience mechanism variables:
-	bestLoss := math.MaxFloat64
-	patienceCounter := 0
-	maxPatience := 500 // Number of iterations with no improvement allowed
-
-	startTime := time.Now()
-	adamTimeStep := 0 // Global counter for Adam updates
-
-	// Global training iteration counter (if you wish to log overall progress)
-	globalIteration := 0
-
-	for iter := 0; iter < iterations; iter++ {
-		// Decay the learning rate periodically.
-		if iter > 0 && iter%decayEpochs == 0 {
-			nn.learningRate *= learningRateDecayFactor
-		}
-
-		// Process mini-batches.
-		for start := 0; start < totalSamples; start += miniBatchSize {
-			end := start + miniBatchSize
-			if end > totalSamples {
-				end = totalSamples
+// forward: returns activations and pre-activations
+func (nn *NeuralNetwork) forward(x []float64) (acts [][]float64, zs [][]float64) {
+	acts = make([][]float64, nn.NumLayers)
+	zs = make([][]float64, nn.NumLayers-1)
+	acts[0] = append([]float64(nil), x...)
+	for l := 0; l < nn.NumLayers-1; l++ {
+		inAct := acts[l]
+		nOut := nn.LayerSizes[l+1]
+		z := make([]float64, nOut)
+		a := make([]float64, nOut)
+		for i := 0; i < nOut; i++ {
+			z[i] = nn.Biases[l][i]
+			for j, v := range inAct {
+				z[i] += nn.Weights[l][i][j] * v
 			}
-			batchInputs := inputs[start:end]
-			batchTargets := targets[start:end]
-			batchSize := len(batchInputs)
-
-			// Forward pass: propagate the mini-batch through all layers.
-			outputs := make([][][]float64, len(nn.Layers)+1)
-			outputs[0] = batchInputs
-			for k := 1; k <= len(nn.Layers); k++ {
-				out, _, _ := nn.Layers[k-1].ForwardBatch(outputs[k-1], true)
-				outputs[k] = out
-			}
-			finalOutputs := outputs[len(nn.Layers)] // shape: batchSize x outputDimension
-
-			// Compute error for the output layer.
-			errors := make([][][]float64, len(nn.Layers))
-			errors[len(nn.Layers)-1] = make([][]float64, batchSize)
-			for b := 0; b < batchSize; b++ {
-				errVec := make([]float64, len(finalOutputs[b]))
-				for j := 0; j < len(finalOutputs[b]); j++ {
-					// FIX: Compute the error over every output element.
-					errVec[j] = batchTargets[b][j] - finalOutputs[b][j]
-				}
-				errors[len(nn.Layers)-1][b] = errVec
-			}
-
-			// Increment the global Adam timestep counter.
-			adamTimeStep++
-			globalIteration++
-
-			// Backward pass: loop from the last layer to the first.
-			for l := len(nn.Layers) - 1; l >= 0; l-- {
-				for j := 0; j < nn.Layers[l].outputs; j++ {
-					gradientSum := 0.0
-					for b := 0; b < batchSize; b++ {
-						var grad float64
-						switch nn.Layers[l].activation {
-						case SigmoidActivation:
-							grad = sigmoidDerivative(outputs[l+1][b][j])
-						case ReLUActivation:
-							grad = reluDerivative(outputs[l+1][b][j])
-						case TanhActivation:
-							grad = tanhDerivative(outputs[l+1][b][j])
-						case LeakyReLUActivation:
-							grad = leakyReLUDerivative(outputs[l+1][b][j])
-						case SoftmaxActivation:
-							grad = outputs[l+1][b][j] * (1 - outputs[l+1][b][j])
-						case IdentityActivation:
-							grad = 1.0
-						}
-						gradientSum += errors[l][b][j] * grad
-					}
-					avgGradient := gradientSum / float64(batchSize)
-
-					// Update weights for neuron j using Adam.
-					for i := 0; i < nn.Layers[l].inputs; i++ {
-						deltaSum := 0.0
-						for b := 0; b < batchSize; b++ {
-							deltaSum += avgGradient * outputs[l][b][i]
-						}
-						avgDelta := deltaSum / float64(batchSize)
-
-						// Optional: Apply gradient clipping to avoid explosion.
-						avgDelta = clip(avgDelta, 1.0)
-
-						// Adam update for weight.
-						m := beta1*nn.Layers[l].weightM[i][j] + (1-beta1)*avgDelta
-						v := beta2*nn.Layers[l].weightV[i][j] + (1-beta2)*avgDelta*avgDelta
-						mHat := m / (1 - math.Pow(beta1, float64(adamTimeStep)))
-						vHat := v / (1 - math.Pow(beta2, float64(adamTimeStep)))
-						weightUpdate := nn.learningRate * mHat / (math.Sqrt(vHat) + epsilon)
-
-						nn.Layers[l].weights[i][j] += weightUpdate
-						// Apply L2 regularization.
-						nn.Layers[l].weights[i][j] -= nn.l2Regularization * nn.learningRate * nn.Layers[l].weights[i][j]
-
-						// Save updated moments.
-						nn.Layers[l].weightM[i][j] = m
-						nn.Layers[l].weightV[i][j] = v
-					}
-
-					// Adam update for bias.
-					mBias := beta1*nn.Layers[l].biasM[j] + (1-beta1)*avgGradient
-					vBias := beta2*nn.Layers[l].biasV[j] + (1-beta2)*avgGradient*avgGradient
-					mHatBias := mBias / (1 - math.Pow(beta1, float64(adamTimeStep)))
-					vHatBias := vBias / (1 - math.Pow(beta2, float64(adamTimeStep)))
-					biasUpdate := nn.learningRate * mHatBias / (math.Sqrt(vHatBias) + epsilon)
-					nn.Layers[l].biases[j] += biasUpdate
-					// Save updated bias moments.
-					nn.Layers[l].biasM[j] = mBias
-					nn.Layers[l].biasV[j] = vBias
-				}
-
-				// Propagate errors to the previous layer if there is one.
-				if l > 0 {
-					errors[l-1] = make([][]float64, batchSize)
-					for b := 0; b < batchSize; b++ {
-						prevErr := make([]float64, nn.Layers[l-1].outputs)
-						for i := 0; i < nn.Layers[l-1].outputs; i++ {
-							sumError := 0.0
-							for j := 0; j < nn.Layers[l].outputs; j++ {
-								sumError += errors[l][b][j] * nn.Layers[l].weights[i][j]
-							}
-							prevErr[i] = sumError
-						}
-						errors[l-1][b] = prevErr
-					}
-				}
-			} // End backward pass.
-		} // End mini-batch processing.
-
-		// Log average loss every printEvery iterations.
-		if iter%printEvery == 0 {
-			totalLoss := 0.0
-			for b := 0; b < totalSamples; b++ {
-				current := inputs[b]
-				for _, layer := range nn.Layers {
-					out, _, _ := layer.Forward(current, false)
-					current = out
-				}
-				// FIX: Compute the loss over the full output vector.
-				loss := CalculateMSE(current, targets[b])
-				totalLoss += loss
-			}
-			avgLoss := totalLoss / float64(totalSamples)
-			fmt.Printf("Iteration %d (global %d), Average Loss: %v\n", iter, globalIteration, avgLoss)
-
-			if avgLoss < bestLoss {
-				bestLoss = avgLoss
-				patienceCounter = 0
+			// identity activation on output layer
+			if l < nn.NumLayers-2 {
+				a[i] = sigmoid(z[i])
 			} else {
-				patienceCounter++
-			}
-			if patienceCounter >= maxPatience {
-				fmt.Printf("Early stopping at iteration %d: no improvement for %d iterations, best loss: %.5f\n", iter, maxPatience, bestLoss)
-				break
+				a[i] = z[i]
 			}
 		}
-	} // End of iterations.
-
-	fmt.Printf("Training completed in %v\n", time.Since(startTime))
+		zs[l] = z
+		acts[l+1] = a
+	}
+	return
 }
 
-func (nn *NeuralNetwork) SaveWeights() {
-	// Connect to the database
-	db := db.ConnectDB()
+// backprop: returns gradients
+func (nn *NeuralNetwork) backprop(x, y []float64) ([][][]float64, [][]float64) {
+	acts, zs := nn.forward(x)
+	nablaW := make([][][]float64, nn.NumLayers-1)
+	nablaB := make([][]float64, nn.NumLayers-1)
+	for l := range nablaW {
+		nOut := nn.LayerSizes[l+1]
+		nablaW[l] = make([][]float64, nOut)
+		nablaB[l] = make([]float64, nOut)
+		for i := 0; i < nOut; i++ {
+			nablaW[l][i] = make([]float64, nn.LayerSizes[l])
+		}
+	}
+	// output layer error (identity derivative = 1)
+	L := nn.NumLayers - 1
+	delta := make([]float64, nn.LayerSizes[L])
+	for i := range delta {
+		delta[i] = acts[L][i] - y[i]
+		nablaB[L-1][i] = delta[i]
+		for j := range acts[L-1] {
+			nablaW[L-1][i][j] = delta[i] * acts[L-1][j]
+		}
+	}
+	// backpropagate
+	for l := L - 2; l >= 0; l-- {
+		newDelta := make([]float64, nn.LayerSizes[l+1])
+		for i := 0; i < nn.LayerSizes[l+1]; i++ {
+			sum := 0.0
+			for j := 0; j < nn.LayerSizes[l+2]; j++ {
+				sum += nn.Weights[l+1][j][i] * delta[j]
+			}
+			newDelta[i] = sum * sigmoidPrime(zs[l][i])
+			nablaB[l][i] = newDelta[i]
+			for j := range acts[l] {
+				nablaW[l][i][j] = newDelta[i] * acts[l][j]
+			}
+		}
+		delta = newDelta
+	}
+	return nablaW, nablaB
+}
 
-	for layerIndex, layer := range nn.Layers {
-		for neuronIndex, weights := range layer.weights {
-			for weightIndex, weight := range weights {
-				_, err := db.ExecContext(context.Background(),
-					"INSERT INTO nn_schema.nn_weights (layer_index, neuron_index, weight_index, weight) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
-					layerIndex, neuronIndex, weightIndex, weight,
-				)
-				if err != nil {
-					log.Printf("Error saving weight: %v", err)
+// updateBatch: apply SGD on one batch
+func (nn *NeuralNetwork) updateBatch(batchX, batchY [][]float64) {
+	m := float64(len(batchX))
+	nablaWSum := make([][][]float64, len(nn.Weights))
+	nablaBSum := make([][]float64, len(nn.Biases))
+	for l := range nn.Weights {
+		nOut := nn.LayerSizes[l+1]
+		nablaWSum[l] = make([][]float64, nOut)
+		nablaBSum[l] = make([]float64, nOut)
+		for i := 0; i < nOut; i++ {
+			nablaWSum[l][i] = make([]float64, nn.LayerSizes[l])
+		}
+	}
+	for i := range batchX {
+		nw, nb := nn.backprop(batchX[i], batchY[i])
+		for l := range nw {
+			for j := range nw[l] {
+				for k := range nw[l][j] {
+					nablaWSum[l][j][k] += nw[l][j][k]
 				}
+				nablaBSum[l][j] += nb[l][j]
+			}
+		}
+	}
+	for l := range nn.Weights {
+		for i := range nn.Weights[l] {
+			for j := range nn.Weights[l][i] {
+				nn.Weights[l][i][j] -= (nn.LearningRate / m) * nablaWSum[l][i][j]
+			}
+			nn.Biases[l][i] -= (nn.LearningRate / m) * nablaBSum[l][i]
+		}
+	}
+}
+
+// MeanSquaredError
+func MeanSquaredError(preds, targets [][]float64) float64 {
+	total := 0.0
+	for i := range preds {
+		for j := range preds[i] {
+			d := preds[i][j] - targets[i][j]
+			total += d * d
+		}
+	}
+	return total / float64(len(preds))
+}
+
+// Train: with early stopping and logging of train/val loss
+func (nn *NeuralNetwork) Train(trainX, trainY, valX, valY [][]float64) {
+	nn.patienceCounter = nn.InitialPatience
+	for epoch := 1; epoch <= nn.Epochs; epoch++ {
+		// shuffle & mini-batches
+		perm := rand.Perm(len(trainX))
+		for i := 0; i < len(trainX); i += nn.BatchSize {
+			end := i + nn.BatchSize
+			if end > len(trainX) {
+				end = len(trainX)
+			}
+			batchX, batchY := [][]float64{}, [][]float64{}
+			for _, idx := range perm[i:end] {
+				batchX = append(batchX, trainX[idx])
+				batchY = append(batchY, trainY[idx])
+			}
+			nn.updateBatch(batchX, batchY)
+		}
+		// compute train loss
+		trainPreds := make([][]float64, len(trainX))
+		for i, x := range trainX {
+			trainPreds[i] = nn.Predict(x)
+		}
+		trainLoss := MeanSquaredError(trainPreds, trainY)
+		// compute val loss
+		valPreds := make([][]float64, len(valX))
+		for i, x := range valX {
+			valPreds[i] = nn.Predict(x)
+		}
+		valLoss := MeanSquaredError(valPreds, valY)
+
+		// record
+		nn.TrainLosses = append(nn.TrainLosses, trainLoss)
+		nn.ValLosses = append(nn.ValLosses, valLoss)
+		fmt.Printf("Epoch %d: train loss=%.6f, val loss=%.6f\n", epoch, trainLoss, valLoss)
+
+		// early stopping
+		if valLoss < nn.BestValLoss {
+			nn.BestValLoss = valLoss
+			nn.patienceCounter = nn.InitialPatience
+		} else {
+			nn.patienceCounter--
+			if nn.patienceCounter <= 0 {
+				fmt.Println("Early stopping.")
+				return
 			}
 		}
 	}
 }
 
-func (nn *NeuralNetwork) LoadWeights() {
-	// Connect to the database
-	db := db.ConnectDB()
+// Predict single sample
+func (nn *NeuralNetwork) Predict(x []float64) []float64 {
+	acts, _ := nn.forward(x)
+	return acts[nn.NumLayers-1]
+}
 
-	// Initialize the database (create table if it doesn't exist).
-	if err := InitDB(db); err != nil {
-		log.Fatal("Error initializing database:", err)
-	}
-
-	rows, err := db.QueryContext(context.Background(), "SELECT layer_index, neuron_index, weight_index, weight FROM nn_schema.nn_weights")
-	if err != nil {
-		log.Fatalf("Error loading weights: %v", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var layerIndex, neuronIndex, weightIndex int
-		var weight float64
-		err := rows.Scan(&layerIndex, &neuronIndex, &weightIndex, &weight)
-		if err != nil {
-			log.Printf("Error scanning row: %v", err)
-			continue
+// Dataset generation for arithmetic sequences
+func generateArithData(nSamples, seqLen, predLen int) ([][]float64, [][]float64) {
+	inputs := make([][]float64, nSamples)
+	targets := make([][]float64, nSamples)
+	for i := 0; i < nSamples; i++ {
+		start := rand.Float64()*10 - 5
+		step := rand.Float64()*4 - 2
+		seq := make([]float64, seqLen+predLen)
+		for j := range seq {
+			seq[j] = start + float64(j)*step
 		}
-		nn.Layers[layerIndex].weights[neuronIndex][weightIndex] = weight
+		inputs[i] = makeSeqFeatures(seq[:seqLen])
+		targets[i] = seq[seqLen:]
 	}
+	return inputs, targets
 }
 
-// InitDB creates the nn_weights table if it doesn't exist.
-func InitDB(db *sql.DB) error {
-	createTableQuery := `
-		CREATE TABLE IF NOT EXISTS nn_schema.nn_weights (
-			id SERIAL PRIMARY KEY,
-			layer_index INT,
-			neuron_index INT,
-			weight_index INT,
-			weight FLOAT8
-		);
-	`
-	_, err := db.Exec(createTableQuery)
-	return err
+func makeSeqFeatures(x []float64) []float64 {
+	n := len(x)
+	feat := make([]float64, 0, 4*n-1)
+	// raw
+	feat = append(feat, x...)
+	// diffs
+	for i := 1; i < n; i++ {
+		feat = append(feat, x[i]-x[i-1])
+	}
+	// positions
+	for i := 0; i < n; i++ {
+		feat = append(feat, float64(i+1))
+	}
+	// squares
+	for _, v := range x {
+		feat = append(feat, v*v)
+	}
+	return feat
 }
 
-func (nn *NeuralNetwork) DeleteWeights() {
-	// Connect to the database
-	db := db.ConnectDB()
-	defer db.Close() // Ensure the database connection is closed
-
-	_, err := db.ExecContext(context.Background(),
-		"DELETE FROM nn_schema.nn_weights")
-	if err != nil {
-		log.Printf("Error deleting weights: %v", err)
+// normalization (z-score)
+func FitScaler(data [][]float64) (means, stds []float64) {
+	nFeatures := len(data[0])
+	means = make([]float64, nFeatures)
+	stds = make([]float64, nFeatures)
+	for j := 0; j < nFeatures; j++ {
+		for i := range data {
+			means[j] += data[i][j]
+		}
+		means[j] /= float64(len(data))
+		for i := range data {
+			d := data[i][j] - means[j]
+			stds[j] += d * d
+		}
+		stds[j] = math.Sqrt(stds[j] / float64(len(data)))
+		if stds[j] == 0 {
+			stds[j] = 1
+		}
 	}
+	return
+}
+
+func Normalize(data [][]float64, means, stds []float64) [][]float64 {
+	norm := make([][]float64, len(data))
+	for i := range data {
+		norm[i] = make([]float64, len(data[i]))
+		for j := range data[i] {
+			norm[i][j] = (data[i][j] - means[j]) / stds[j]
+		}
+	}
+	return norm
+}
+
+func Denormalize(vec, means, stds []float64) []float64 {
+	down := make([]float64, len(vec))
+	for i := range vec {
+		down[i] = vec[i]*stds[i] + means[i]
+	}
+	return down
+}
+
+// EvaluateMetrics calculates MSE, RMSE, MAE, and R² for predictions vs. targets
+func EvaluateMetrics(preds, targets [][]float64) {
+	n := len(preds)
+	if n == 0 || len(preds[0]) == 0 {
+		fmt.Println("Empty predictions or targets")
+		return
+	}
+
+	mse := 0.0
+	mae := 0.0
+	ssRes := 0.0
+	ssTot := 0.0
+	mean := 0.0
+
+	// Calculate mean of target values
+	for i := range targets {
+		for j := range targets[i] {
+			mean += targets[i][j]
+		}
+	}
+	mean /= float64(n * len(targets[0]))
+
+	// Compute metrics
+	for i := range preds {
+		for j := range preds[i] {
+			diff := preds[i][j] - targets[i][j]
+			mse += diff * diff
+			mae += math.Abs(diff)
+
+			ssRes += diff * diff
+			ssTot += math.Pow(targets[i][j]-mean, 2)
+		}
+	}
+
+	mse /= float64(n)
+	rmse := math.Sqrt(mse)
+	mae /= float64(n)
+	r2 := 1 - ssRes/ssTot
+
+	fmt.Printf("Evaluation Metrics:\n")
+	fmt.Printf("MSE  = %.6f\n", mse)
+	fmt.Printf("RMSE = %.6f\n", rmse)
+	fmt.Printf("MAE  = %.6f\n", mae)
+	fmt.Printf("R²   = %.6f\n", r2)
 }

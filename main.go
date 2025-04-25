@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	neuralnetwork "github.com/infiniteCrank/mathbot/NeuralNetwork"
 	qaelm "github.com/infiniteCrank/mathbot/agent"
 	"github.com/infiniteCrank/mathbot/db"
 	"github.com/infiniteCrank/mathbot/elm"
@@ -940,7 +941,7 @@ func main() {
 
 		// Train ELM
 		inputSize := len(trainX[0])
-		elmModel := elm.NewELM(inputSize, *hiddenSize, *predLen, 0, *lambda)
+		elmModel := elm.NewELM(inputSize, *hiddenSize, *predLen, 1, *lambda)
 		elmModel.Train(trainX, trainY, valX, valY)
 
 		// Compute validation RMSE
@@ -994,10 +995,81 @@ func main() {
 
 		autoregTest(elmModel, *seqLen, *predLen, 1000, -5, 5, -2, 2)
 		autoregTest(elmModel, *seqLen, *predLen, 1000, -100, 100, -10, 10)
+	case "neuroNetwork":
+		// parameters
+		seqLen, predLen := 5, 5
+		nSamples := 1000
+		trainFrac := 0.8
+		extraSamples := 500 // Number of additional sequences to generate
 
+		// generate and split data
+		X, Y := generateArithData(nSamples, seqLen, predLen)
+
+		// Generate extra training samples using makeTestSeq
+		for i := 0; i < extraSamples; i++ {
+			start := float64(rand.Intn(10)) // Random start between 0 and 9 (inclusive)
+			step := rand.Float64() * 2      // Step can vary between 0 and 2
+			extraSeq := makeTestSeq(start, step, seqLen+predLen)
+
+			X = append(X, makeSeqFeatures(extraSeq[:seqLen]))
+			Y = append(Y, extraSeq[seqLen:])
+		}
+
+		nTrain := int(trainFrac * float64(len(X)))
+		trainX, trainY := X[:nTrain], Y[:nTrain]
+		valX, valY := X[nTrain:], Y[nTrain:]
+
+		// fit scalers & normalize
+		xMeans, xStds := neuralnetwork.FitScaler(trainX)
+		yMeans, yStds := neuralnetwork.FitScaler(trainY)
+		trainX = neuralnetwork.Normalize(trainX, xMeans, xStds)
+		valX = neuralnetwork.Normalize(valX, xMeans, xStds)
+		trainY = neuralnetwork.Normalize(trainY, yMeans, yStds)
+		valY = neuralnetwork.Normalize(valY, yMeans, yStds)
+
+		// build, train, and validate
+		inputDim := len(trainX[0])
+		nn := neuralnetwork.NewNetwork([]int{inputDim, 1000, 1000, predLen}, 0.01, 300, 32, 10)
+		nn.Train(trainX, trainY, valX, valY)
+
+		// predict on validation set
+		valPredsNorm := make([][]float64, len(valX))
+		for i, x := range valX {
+			valPredsNorm[i] = nn.Predict(x)
+		}
+		valPreds := make([][]float64, len(valPredsNorm))
+		for i, row := range valPredsNorm {
+			valPreds[i] = neuralnetwork.Denormalize(row, yMeans, yStds)
+		}
+
+		valTargets := make([][]float64, len(valY))
+		for i, row := range valY {
+			valTargets[i] = neuralnetwork.Denormalize(row, yMeans, yStds)
+		}
+
+		// evaluate metrics
+		neuralnetwork.EvaluateMetrics(valPreds, valTargets)
+
+		// test on a new sequence
+		testSequences := [][]float64{
+			{1, 3, 5, 7, 9},
+			{2, 4, 6, 8, 10},
+			{12, 24, 36, 48, 60},
+		}
+
+		for _, testSeq := range testSequences {
+			testFeat := makeSeqFeatures(testSeq)
+			tn := neuralnetwork.Normalize([][]float64{testFeat}, xMeans, xStds)[0]
+			predNorm := nn.Predict(tn)
+			pred := neuralnetwork.Denormalize(predNorm, yMeans, yStds)
+
+			fmt.Printf("Input: %v\n", testSeq)
+			fmt.Printf("Predicted next %d: %v\n", predLen, pred)
+		}
 	default:
 		fmt.Println("Invalid mode. Use -mode with one of: addnew, addpredict, addTrain, countnew, countpredict, countingTrain, combineTech, protein, list, or drop")
 	}
+
 }
 
 // testGeneralization runs out‑of‑sample arithmetic‐sequence tests

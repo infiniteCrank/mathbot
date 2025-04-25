@@ -8,43 +8,51 @@ import (
 
 // NeuralNetwork: fully-connected feedforward network with backprop, SGD, early stopping, and LR scheduling.
 type NeuralNetwork struct {
-	LayerSizes   []int // sizes for each layer
-	NumLayers    int   // number of layers
-	Weights      [][][]float64
-	Biases       [][]float64
-	LearningRate float64
-	Epochs       int
-	BatchSize    int
-	Patience     int // early stopping patience
-	BestValLoss  float64
+	LayerSizes      []int // sizes for each layer
+	NumLayers       int   // number of layers
+	Weights         [][][]float64
+	Biases          [][]float64
+	LearningRate    float64
+	Epochs          int
+	BatchSize       int
+	InitialPatience int // initial early stopping patience
+	patienceCounter int // countdown
+	BestValLoss     float64
+	TrainLosses     []float64 // record of training losses
+	ValLosses       []float64 // record of validation losses
 }
 
-// NewNetwork: initialize weights & biases
+// NewNetwork: initialize weights & biases with Xavier init, set patience
 func NewNetwork(sizes []int, lr float64, epochs, batchSize, patience int) *NeuralNetwork {
 	nn := &NeuralNetwork{
-		LayerSizes:   append([]int(nil), sizes...),
-		NumLayers:    len(sizes),
-		LearningRate: lr,
-		Epochs:       epochs,
-		BatchSize:    batchSize,
-		Patience:     patience,
-		BestValLoss:  math.Inf(1),
+		LayerSizes:      append([]int(nil), sizes...),
+		NumLayers:       len(sizes),
+		LearningRate:    lr,
+		Epochs:          epochs,
+		BatchSize:       batchSize,
+		InitialPatience: patience,
+		BestValLoss:     math.Inf(1),
+		TrainLosses:     make([]float64, 0, epochs),
+		ValLosses:       make([]float64, 0, epochs),
 	}
+	// initialize counters
+	nn.patienceCounter = patience
+
 	nn.Weights = make([][][]float64, nn.NumLayers-1)
 	nn.Biases = make([][]float64, nn.NumLayers-1)
+	// Xavier initialization
 	for l := 0; l < nn.NumLayers-1; l++ {
 		in, out := sizes[l], sizes[l+1]
+		limit := math.Sqrt(6.0 / float64(in+out))
 		nn.Weights[l] = make([][]float64, out)
 		for i := 0; i < out; i++ {
 			nn.Weights[l][i] = make([]float64, in)
 			for j := 0; j < in; j++ {
-				nn.Weights[l][i][j] = rand.NormFloat64()
+				nn.Weights[l][i][j] = rand.Float64()*2*limit - limit
 			}
 		}
+		// biases init to zero
 		nn.Biases[l] = make([]float64, out)
-		for i := 0; i < out; i++ {
-			nn.Biases[l][i] = rand.NormFloat64()
-		}
 	}
 	return nn
 }
@@ -71,7 +79,12 @@ func (nn *NeuralNetwork) forward(x []float64) (acts [][]float64, zs [][]float64)
 			for j, v := range inAct {
 				z[i] += nn.Weights[l][i][j] * v
 			}
-			a[i] = sigmoid(z[i])
+			// identity activation on output layer
+			if l < nn.NumLayers-2 {
+				a[i] = sigmoid(z[i])
+			} else {
+				a[i] = z[i]
+			}
 		}
 		zs[l] = z
 		acts[l+1] = a
@@ -92,11 +105,11 @@ func (nn *NeuralNetwork) backprop(x, y []float64) ([][][]float64, [][]float64) {
 			nablaW[l][i] = make([]float64, nn.LayerSizes[l])
 		}
 	}
-	// output layer error
+	// output layer error (identity derivative = 1)
 	L := nn.NumLayers - 1
 	delta := make([]float64, nn.LayerSizes[L])
 	for i := range delta {
-		delta[i] = (acts[L][i] - y[i]) * sigmoidPrime(zs[L-1][i])
+		delta[i] = acts[L][i] - y[i]
 		nablaB[L-1][i] = delta[i]
 		for j := range acts[L-1] {
 			nablaW[L-1][i][j] = delta[i] * acts[L-1][j]
@@ -126,7 +139,6 @@ func (nn *NeuralNetwork) updateBatch(batchX, batchY [][]float64) {
 	m := float64(len(batchX))
 	nablaWSum := make([][][]float64, len(nn.Weights))
 	nablaBSum := make([][]float64, len(nn.Biases))
-	// init
 	for l := range nn.Weights {
 		nOut := nn.LayerSizes[l+1]
 		nablaWSum[l] = make([][]float64, nOut)
@@ -135,7 +147,6 @@ func (nn *NeuralNetwork) updateBatch(batchX, batchY [][]float64) {
 			nablaWSum[l][i] = make([]float64, nn.LayerSizes[l])
 		}
 	}
-	// accumulate
 	for i := range batchX {
 		nw, nb := nn.backprop(batchX[i], batchY[i])
 		for l := range nw {
@@ -147,7 +158,6 @@ func (nn *NeuralNetwork) updateBatch(batchX, batchY [][]float64) {
 			}
 		}
 	}
-	// update
 	for l := range nn.Weights {
 		for i := range nn.Weights[l] {
 			for j := range nn.Weights[l][i] {
@@ -158,12 +168,24 @@ func (nn *NeuralNetwork) updateBatch(batchX, batchY [][]float64) {
 	}
 }
 
-// Train: with early stopping and LR step decay
+// MeanSquaredError
+func MeanSquaredError(preds, targets [][]float64) float64 {
+	total := 0.0
+	for i := range preds {
+		for j := range preds[i] {
+			d := preds[i][j] - targets[i][j]
+			total += d * d
+		}
+	}
+	return total / float64(len(preds))
+}
+
+// Train: with early stopping and logging of train/val loss
 func (nn *NeuralNetwork) Train(trainX, trainY, valX, valY [][]float64) {
+	nn.patienceCounter = nn.InitialPatience
 	for epoch := 1; epoch <= nn.Epochs; epoch++ {
-		// shuffle
+		// shuffle & mini-batches
 		perm := rand.Perm(len(trainX))
-		// mini-batches
 		for i := 0; i < len(trainX); i += nn.BatchSize {
 			end := i + nn.BatchSize
 			if end > len(trainX) {
@@ -176,20 +198,31 @@ func (nn *NeuralNetwork) Train(trainX, trainY, valX, valY [][]float64) {
 			}
 			nn.updateBatch(batchX, batchY)
 		}
-		// compute val loss
-		preds := make([][]float64, len(valX))
-		for i, x := range valX {
-			preds[i] = nn.Predict(x)
+		// compute train loss
+		trainPreds := make([][]float64, len(trainX))
+		for i, x := range trainX {
+			trainPreds[i] = nn.Predict(x)
 		}
-		loss := MeanSquaredError(preds, valY)
-		fmt.Printf("Epoch %d: val loss=%.6f\n", epoch, loss)
+		trainLoss := MeanSquaredError(trainPreds, trainY)
+		// compute val loss
+		valPreds := make([][]float64, len(valX))
+		for i, x := range valX {
+			valPreds[i] = nn.Predict(x)
+		}
+		valLoss := MeanSquaredError(valPreds, valY)
+
+		// record
+		nn.TrainLosses = append(nn.TrainLosses, trainLoss)
+		nn.ValLosses = append(nn.ValLosses, valLoss)
+		fmt.Printf("Epoch %d: train loss=%.6f, val loss=%.6f\n", epoch, trainLoss, valLoss)
+
 		// early stopping
-		if loss < nn.BestValLoss {
-			nn.BestValLoss = loss
-			nn.Patience = nn.Patience // reset
+		if valLoss < nn.BestValLoss {
+			nn.BestValLoss = valLoss
+			nn.patienceCounter = nn.InitialPatience
 		} else {
-			nn.Patience--
-			if nn.Patience <= 0 {
+			nn.patienceCounter--
+			if nn.patienceCounter <= 0 {
 				fmt.Println("Early stopping.")
 				return
 			}
@@ -201,18 +234,6 @@ func (nn *NeuralNetwork) Train(trainX, trainY, valX, valY [][]float64) {
 func (nn *NeuralNetwork) Predict(x []float64) []float64 {
 	acts, _ := nn.forward(x)
 	return acts[nn.NumLayers-1]
-}
-
-// MSE
-func MeanSquaredError(preds, targets [][]float64) float64 {
-	total := 0.0
-	for i := range preds {
-		for j := range preds[i] {
-			d := preds[i][j] - targets[i][j]
-			total += d * d
-		}
-	}
-	return total / float64(len(preds))
 }
 
 // Dataset generation for arithmetic sequences
@@ -291,4 +312,50 @@ func Denormalize(vec, means, stds []float64) []float64 {
 		down[i] = vec[i]*stds[i] + means[i]
 	}
 	return down
+}
+
+// EvaluateMetrics calculates MSE, RMSE, MAE, and R² for predictions vs. targets
+func EvaluateMetrics(preds, targets [][]float64) {
+	n := len(preds)
+	if n == 0 || len(preds[0]) == 0 {
+		fmt.Println("Empty predictions or targets")
+		return
+	}
+
+	mse := 0.0
+	mae := 0.0
+	ssRes := 0.0
+	ssTot := 0.0
+	mean := 0.0
+
+	// Calculate mean of target values
+	for i := range targets {
+		for j := range targets[i] {
+			mean += targets[i][j]
+		}
+	}
+	mean /= float64(n * len(targets[0]))
+
+	// Compute metrics
+	for i := range preds {
+		for j := range preds[i] {
+			diff := preds[i][j] - targets[i][j]
+			mse += diff * diff
+			mae += math.Abs(diff)
+
+			ssRes += diff * diff
+			ssTot += math.Pow(targets[i][j]-mean, 2)
+		}
+	}
+
+	mse /= float64(n)
+	rmse := math.Sqrt(mse)
+	mae /= float64(n)
+	r2 := 1 - ssRes/ssTot
+
+	fmt.Printf("Evaluation Metrics:\n")
+	fmt.Printf("MSE  = %.6f\n", mse)
+	fmt.Printf("RMSE = %.6f\n", rmse)
+	fmt.Printf("MAE  = %.6f\n", mae)
+	fmt.Printf("R²   = %.6f\n", r2)
 }

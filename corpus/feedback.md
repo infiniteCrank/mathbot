@@ -34,3 +34,6 @@
 ## Q: functions
  A: Functions in Go are blocks of code designed to perform specific tasks. They are a fundamental part of Go programming, promoting code reusability, readability, and modularity
 
+## Q: how do i define a slice in go 
+ A: A slice in Go is a dynamically-sized, flexible view into the elements of an array. Slices are declared similarly to arrays, but without specifying the size. Here's how to define a slice in Go: Using a slice literal 
+

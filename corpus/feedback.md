@@ -34,3 +34,6 @@
 ## Q: functions
  A: Functions in Go are blocks of code designed to perform specific tasks. They are a fundamental part of Go programming, promoting code reusability, readability, and modularity
 
+## Q: are monkeys mamals
+ A: yes
+

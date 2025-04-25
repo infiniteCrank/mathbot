@@ -1000,10 +1000,22 @@ func main() {
 		seqLen, predLen := 5, 5
 		nSamples := 1000
 		trainFrac := 0.8
+		extraSamples := 500 // Number of additional sequences to generate
 
 		// generate and split data
 		X, Y := generateArithData(nSamples, seqLen, predLen)
-		nTrain := int(trainFrac * float64(nSamples))
+
+		// Generate extra training samples using makeTestSeq
+		for i := 0; i < extraSamples; i++ {
+			start := float64(rand.Intn(10)) // Random start between 0 and 9 (inclusive)
+			step := rand.Float64() * 2      // Step can vary between 0 and 2
+			extraSeq := makeTestSeq(start, step, seqLen+predLen)
+
+			X = append(X, makeSeqFeatures(extraSeq[:seqLen]))
+			Y = append(Y, extraSeq[seqLen:])
+		}
+
+		nTrain := int(trainFrac * float64(len(X)))
 		trainX, trainY := X[:nTrain], Y[:nTrain]
 		valX, valY := X[nTrain:], Y[nTrain:]
 
@@ -1017,7 +1029,7 @@ func main() {
 
 		// build, train, and validate
 		inputDim := len(trainX[0])
-		nn := neuralnetwork.NewNetwork([]int{inputDim, 100, 100, predLen}, 0.01, 300, 32, 10)
+		nn := neuralnetwork.NewNetwork([]int{inputDim, 1000, 1000, predLen}, 0.01, 300, 32, 10)
 		nn.Train(trainX, trainY, valX, valY)
 
 		// predict on validation set
@@ -1039,34 +1051,21 @@ func main() {
 		neuralnetwork.EvaluateMetrics(valPreds, valTargets)
 
 		// test on a new sequence
-		testSeq := []float64{1, 3, 5, 7, 9}
-		testFeat := makeSeqFeatures(testSeq)
-		tn := neuralnetwork.Normalize([][]float64{testFeat}, xMeans, xStds)[0]
-		predNorm := nn.Predict(tn)
-		pred := neuralnetwork.Denormalize(predNorm, yMeans, yStds)
+		testSequences := [][]float64{
+			{1, 3, 5, 7, 9},
+			{2, 4, 6, 8, 10},
+			{12, 24, 36, 48, 60},
+		}
 
-		fmt.Printf("Input: %v\n", testSeq)
-		fmt.Printf("Predicted next %d: %v\n", predLen, pred)
+		for _, testSeq := range testSequences {
+			testFeat := makeSeqFeatures(testSeq)
+			tn := neuralnetwork.Normalize([][]float64{testFeat}, xMeans, xStds)[0]
+			predNorm := nn.Predict(tn)
+			pred := neuralnetwork.Denormalize(predNorm, yMeans, yStds)
 
-		// test on a new sequence
-		testSeq = []float64{2, 4, 6, 8, 10}
-		testFeat = makeSeqFeatures(testSeq)
-		tn = neuralnetwork.Normalize([][]float64{testFeat}, xMeans, xStds)[0]
-		predNorm = nn.Predict(tn)
-		pred = neuralnetwork.Denormalize(predNorm, yMeans, yStds)
-
-		fmt.Printf("Input: %v\n", testSeq)
-		fmt.Printf("Predicted next %d: %v\n", predLen, pred)
-
-		// test on a new sequence
-		testSeq = []float64{12, 24, 36, 48, 60}
-		testFeat = makeSeqFeatures(testSeq)
-		tn = neuralnetwork.Normalize([][]float64{testFeat}, xMeans, xStds)[0]
-		predNorm = nn.Predict(tn)
-		pred = neuralnetwork.Denormalize(predNorm, yMeans, yStds)
-
-		fmt.Printf("Input: %v\n", testSeq)
-		fmt.Printf("Predicted next %d: %v\n", predLen, pred)
+			fmt.Printf("Input: %v\n", testSeq)
+			fmt.Printf("Predicted next %d: %v\n", predLen, pred)
+		}
 	default:
 		fmt.Println("Invalid mode. Use -mode with one of: addnew, addpredict, addTrain, countnew, countpredict, countingTrain, combineTech, protein, list, or drop")
 	}

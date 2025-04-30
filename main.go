@@ -9,6 +9,8 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -17,6 +19,7 @@ import (
 	"github.com/infiniteCrank/mathbot/db"
 	"github.com/infiniteCrank/mathbot/elm"
 	"github.com/infiniteCrank/mathbot/fileLoader"
+	"github.com/infiniteCrank/mathbot/tfidf"
 	_ "github.com/lib/pq"
 )
 
@@ -1029,7 +1032,7 @@ func main() {
 
 		// build, train, and validate
 		inputDim := len(trainX[0])
-		nn := neuralnetwork.NewNetwork([]int{inputDim, 1000, 1000, predLen}, 0.01, 300, 32, 10)
+		nn := neuralnetwork.NewNetwork([]int{inputDim, 1000, 1000, predLen}, 0.01, 20, 32, 10)
 		nn.Train(trainX, trainY, valX, valY)
 
 		// predict on validation set
@@ -1066,10 +1069,285 @@ func main() {
 			fmt.Printf("Input: %v\n", testSeq)
 			fmt.Printf("Predicted next %d: %v\n", predLen, pred)
 		}
+	case "nnagent":
+		validationSplit := 0.2
+
+		// Load corpus and parse QA
+		docs, err := fileLoader.LoadMarkdownFiles("corpus")
+		if err != nil {
+			log.Fatalf("Failed to load markdown: %v", err)
+		}
+		if len(docs) == 0 {
+			log.Fatalf("No markdown files in 'corpus'")
+		}
+		fmt.Printf("Loaded %d markdown files\n", len(docs))
+
+		qas := qaelm.ParseMarkdownQA(docs)
+		if len(qas) == 0 {
+			log.Fatalf("No Q/A pairs found. Ensure '## Q:' headings.")
+		}
+		fmt.Printf("Extracted %d Q/A pairs\n", len(qas))
+
+		// Shuffle and split the dataset into training and validation sets
+		rand.Shuffle(len(qas), func(i, j int) {
+			qas[i], qas[j] = qas[j], qas[i]
+		})
+
+		// Determine split index
+		trainSize := int(float64(len(qas)) * (1 - validationSplit))
+		trainData := qas[:trainSize]
+		valData := qas[trainSize:]
+
+		// Extract questions for training and validation
+		trainQuestions := make([]string, len(trainData))
+		for i, qa := range trainData {
+			trainQuestions[i] = qa.Question
+		}
+
+		// Compute TF-IDF on all training questions to build vocabulary and idf
+		tf := tfidf.NewTFIDF(trainQuestions)
+		tf.CalculateScores()
+
+		// Store idf values
+		idf := make(map[string]float64, len(tf.InverseDocFreq))
+		for term, val := range tf.InverseDocFreq {
+			idf[term] = val
+		}
+
+		// Build sorted vocabulary from idf
+		terms := make([]string, 0, len(idf))
+		for term := range idf {
+			terms = append(terms, term)
+		}
+		sort.Strings(terms)
+		termToIndex := make(map[string]int, len(terms))
+		for i, t := range terms {
+			termToIndex[t] = i
+		}
+
+		// Extract unique answers
+		answerToIndex := make(map[string]int)
+		answers := make([]string, 0)
+		for _, qa := range qas {
+			if _, ok := answerToIndex[qa.Answer]; !ok {
+				answerToIndex[qa.Answer] = len(answers)
+				answers = append(answers, qa.Answer)
+			}
+		}
+
+		// Prepare training matrices
+		inputSize := len(terms)
+		outputSize := len(answers)
+		trainInputs := make([][]float64, len(trainData))
+		trainTargets := make([][]float64, len(trainData))
+		for i, qa := range trainData {
+			// Vectorize question using same TF-IDF logic
+			tfq := tfidf.NewTFIDF([]string{qa.Question})
+			tfp := tfq.ProcessedWords
+			vec := make([]float64, inputSize)
+			total := float64(len(tfp))
+			for _, w := range tfp {
+				if idx, ok := termToIndex[w]; ok {
+					if idfVal, ok2 := idf[w]; ok2 {
+						vec[idx] += (1.0 / total) * idfVal
+					}
+				}
+			}
+			trainInputs[i] = vec
+			// One-hot encode answer
+			t := make([]float64, outputSize)
+			ai := answerToIndex[qa.Answer]
+			t[ai] = 1.0
+			trainTargets[i] = t
+		}
+
+		// Prepare validation matrices similarly
+		valInputs := make([][]float64, len(valData))
+		valTargets := make([][]float64, len(valData))
+		for i, qa := range valData {
+			tfq := tfidf.NewTFIDF([]string{qa.Question})
+			tfp := tfq.ProcessedWords
+			vec := make([]float64, inputSize)
+			total := float64(len(tfp))
+			for _, w := range tfp {
+				if idx, ok := termToIndex[w]; ok {
+					if idfVal, ok2 := idf[w]; ok2 {
+						vec[idx] += (1.0 / total) * idfVal
+					}
+				}
+			}
+			valInputs[i] = vec
+			// One-hot encode answer
+			t := make([]float64, outputSize)
+			ai := answerToIndex[qa.Answer]
+			t[ai] = 1.0
+			valTargets[i] = t
+		}
+
+		// Define the network size - e.g., one hidden layer with a specified number of neurons
+		layerSizes := []int{inputSize, 6000, outputSize} // Input -> Hidden -> Output
+		learningRate := 0.0001
+		epochs := 1000
+		batchSize := 32
+		patience := 10
+
+		// Initialize the neural network
+		nn := neuralnetwork.NewNetwork(layerSizes, learningRate, epochs, batchSize, patience)
+
+		// Step 2: Train the network with the generated training data
+		nn.Train(trainInputs, trainTargets, valInputs, valTargets)
+
+		// Step 3: Evaluate the model on validation data
+		valPreds := make([][]float64, len(valInputs))
+		for i, x := range valInputs {
+			valPreds[i] = nn.Predict(x)
+		}
+
+		// Evaluate metrics
+		neuralnetwork.EvaluateMetrics(valPreds, valTargets)
+	case "nn2":
+		// 1. Load corpus file
+		data, err := os.ReadFile("corpus/qa_corpus.md")
+		if err != nil {
+			log.Fatalf("failed reading corpus: %v", err)
+		}
+		// parse markdown QA into structs
+		docs := []string{string(data)}
+		qas := ParseMarkdownQA(docs)
+		if len(qas) == 0 {
+			log.Fatal("no Q&A pairs found; check your '## Q:' markers")
+		}
+
+		// separate questions and answers
+		questions := make([]string, len(qas))
+		answers := make([]string, len(qas))
+		for i, qa := range qas {
+			questions[i] = qa.Question
+			answers[i] = qa.Answer
+		}
+
+		// 2. Fit TF-IDF
+		model := tfidf.NewTFIDF(questions)
+		model.CalculateScores()
+		fmt.Println("Top terms:", model.ExtractKeywords(5))
+
+		// 3. One-hot encode answers
+		labelOf := make(map[string]int)
+		respOf := make(map[int]string)
+		for _, a := range answers {
+			if _, ok := labelOf[a]; !ok {
+				id := len(labelOf)
+				labelOf[a] = id
+				respOf[id] = a
+			}
+		}
+
+		// 4. Build feature & label matrices
+		N := len(questions)
+		features := model.TransformBatch(questions)
+		labels := make([][]float64, N)
+		for i, a := range answers {
+			vec := make([]float64, len(labelOf))
+			vec[labelOf[a]] = 1.0
+			labels[i] = vec
+		}
+
+		// 5. Shuffle & split 80/20
+		perm := rand.Perm(N)
+		split := int(0.8 * float64(N))
+		trainX := make([][]float64, split)
+		trainY := make([][]float64, split)
+		valX := make([][]float64, N-split)
+		valY := make([][]float64, N-split)
+		for i, idx := range perm {
+			if i < split {
+				trainX[i] = features[idx]
+				trainY[i] = labels[idx]
+			} else {
+				j := i - split
+				valX[j] = features[idx]
+				valY[j] = labels[idx]
+			}
+		}
+
+		// 6. Create & train network
+		vocabSize := len(model.Vocabulary)
+		numLabels := len(labelOf)
+		nn := neuralnetwork.NewNetwork(
+			[]int{vocabSize, 100, numLabels},
+			0.01, // learning rate
+			50,   // epochs
+			16,   // batch size
+			5,    // early stopping patience
+		)
+		nn.Train(trainX, trainY, valX, valY)
+
+		// 7. Chat loop
+		reader := bufio.NewReader(os.Stdin)
+		fmt.Println("Chatbot ready! Type 'exit' to quit.")
+		for {
+			fmt.Print("> ")
+			text, _ := reader.ReadString('\n')
+			text = strings.TrimSpace(text)
+			if text == "exit" {
+				break
+			}
+			vec := model.Transform(text)
+			out := nn.Predict(vec)
+			best := argmax(out)
+			fmt.Println(respOf[best])
+		}
 	default:
 		fmt.Println("Invalid mode. Use -mode with one of: addnew, addpredict, addTrain, countnew, countpredict, countingTrain, combineTech, protein, list, or drop")
 	}
 
+}
+
+// QA holds a question and its answer.
+type QA struct {
+	Question string
+	Answer   string
+}
+
+// ParseMarkdownQA parses markdown documents for '## Q:' headings and their answers.
+func ParseMarkdownQA(corpus []string) []QA {
+	qRegex := regexp.MustCompile(`^##\s*Q:\s*(.+)$`)
+	heading := regexp.MustCompile(`^##`)
+	var qas []QA
+
+	for _, doc := range corpus {
+		lines := strings.Split(doc, "\n")
+		for i, line := range lines {
+			if m := qRegex.FindStringSubmatch(line); m != nil {
+				question := strings.TrimSpace(m[1])
+				var ansBuilder strings.Builder
+				// gather answer lines until next heading
+				for j := i + 1; j < len(lines) && !heading.MatchString(lines[j]); j++ {
+					l := strings.TrimSpace(lines[j])
+					if l != "" {
+						ansBuilder.WriteString(l)
+						ansBuilder.WriteByte(' ')
+					}
+				}
+				answer := strings.TrimSpace(ansBuilder.String())
+				if answer != "" {
+					qas = append(qas, QA{Question: question, Answer: answer})
+				}
+			}
+		}
+	}
+	return qas
+}
+
+// argmax returns the index of the maximum element.
+func argmax(xs []float64) int {
+	best, idx := xs[0], 0
+	for i, v := range xs[1:] {
+		if v > best {
+			best, idx = v, i+1
+		}
+	}
+	return idx
 }
 
 // testGeneralization runs out‑of‑sample arithmetic‐sequence tests

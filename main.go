@@ -17,6 +17,8 @@ import (
 	"github.com/infiniteCrank/mathbot/db"
 	"github.com/infiniteCrank/mathbot/elm"
 	"github.com/infiniteCrank/mathbot/fileLoader"
+	"github.com/infiniteCrank/mathbot/rnn"
+	"github.com/infiniteCrank/mathbot/tfidf"
 	_ "github.com/lib/pq"
 )
 
@@ -1066,7 +1068,130 @@ func main() {
 			fmt.Printf("Input: %v\n", testSeq)
 			fmt.Printf("Predicted next %d: %v\n", predLen, pred)
 		}
+	case "rnn":
+		data, err := os.ReadFile("corpus/go_textbook.md")
+		if err != nil {
+			panic("could not read markdown file")
+		}
+		text := strings.ToLower(string(data))
+		words := strings.Fields(text)
+		corpus := []string{strings.Join(words, " ")}
+		tfidfModel := tfidf.NewTFIDF(corpus)
 
+		var inputs, targets []string
+		for i := 0; i < len(words)-1; i++ {
+			input := strings.Join(words[:i+1], " ")
+			target := words[i+1]
+			inputs = append(inputs, input)
+			targets = append(targets, target)
+			if len(inputs) > 10000 {
+				break
+			}
+		}
+		inputVecs := tfidfModel.TransformBatch(inputs)
+		targetVecs := tfidfModel.TransformBatch(targets)
+		for i := range targetVecs {
+			sum := 0.0
+			for _, v := range targetVecs[i] {
+				sum += v * v
+			}
+			norm := math.Sqrt(sum)
+			if norm != 0 {
+				for j := range targetVecs[i] {
+					targetVecs[i][j] /= norm
+				}
+			}
+		}
+
+		inputSize := len(inputVecs[0])
+		hiddenSize := 64
+		outputSize := len(targetVecs[0])
+		gru := rnn.NewGRUCell(inputSize, hiddenSize)
+		outputWeights := make([][]float64, outputSize)
+		outputBias := make([]float64, outputSize)
+		mW := make([][]float64, outputSize)
+		vW := make([][]float64, outputSize)
+		mB := make([]float64, outputSize)
+		vB := make([]float64, outputSize)
+		for i := range outputWeights {
+			outputWeights[i] = rnn.RandVector(hiddenSize)
+			mW[i] = make([]float64, hiddenSize)
+			vW[i] = make([]float64, hiddenSize)
+		}
+		lr := 0.001
+		beta1, beta2 := 0.9, 0.999
+		epsilon := 1e-8
+		epochs := 100
+
+		for epoch := 0; epoch < epochs; epoch++ {
+			totalLoss := 0.0
+			for i := range inputVecs {
+				gru.Reset()
+				h := inputVecs[i]
+				hout, _ := gru.Forward(h)
+				pred := make([]float64, outputSize)
+				for j := 0; j < outputSize; j++ {
+					pred[j] = rnn.Dot(hout, outputWeights[j]) + outputBias[j]
+				}
+				target := targetVecs[i]
+				for j := 0; j < outputSize; j++ {
+					diff := pred[j] - target[j]
+					totalLoss += 0.5 * diff * diff
+					for k := 0; k < hiddenSize; k++ {
+						grad := diff * hout[k]
+						mW[j][k] = beta1*mW[j][k] + (1-beta1)*grad
+						vW[j][k] = beta2*vW[j][k] + (1-beta2)*grad*grad
+						mHat := mW[j][k] / (1 - math.Pow(beta1, float64(epoch+1)))
+						vHat := vW[j][k] / (1 - math.Pow(beta2, float64(epoch+1)))
+						outputWeights[j][k] -= lr * mHat / (math.Sqrt(vHat) + epsilon)
+					}
+					// --- Adam optimizer update for output bias ---
+					mB[j] = beta1*mB[j] + (1-beta1)*diff
+					vB[j] = beta2*vB[j] + (1-beta2)*diff*diff
+					mHatB := mB[j] / (1 - math.Pow(beta1, float64(epoch+1)))
+					vHatB := vB[j] / (1 - math.Pow(beta2, float64(epoch+1)))
+					outputBias[j] -= lr * mHatB / (math.Sqrt(vHatB) + epsilon)
+				}
+			}
+			if epoch%10 == 0 {
+				fmt.Printf("Epoch %d: Loss = %.4f\n", epoch, totalLoss/float64(len(inputVecs)))
+			}
+		}
+
+		model := &rnn.GRUModel{OutputWeights: outputWeights, OutputBias: outputBias}
+		err = rnn.SaveModelToPostgres(dbConn, model)
+		if err != nil {
+			panic(err)
+		}
+		fmt.Println("Model saved to PostgreSQL.")
+
+		loadedModel, err := rnn.LoadModelFromPostgres(dbConn, "markdown_gru")
+		if err != nil {
+			panic(err)
+		}
+		fmt.Println("Loaded model. Enter a prompt (e.g., 'introduction to'):")
+
+		scanner := bufio.NewScanner(os.Stdin)
+		for {
+			fmt.Print("> ")
+			if !scanner.Scan() {
+				break
+			}
+			prompt := scanner.Text()
+			gru.Reset()
+			predicted := prompt
+			for i := 0; i < 5; i++ {
+				vec := tfidfModel.Transform(predicted)
+				hout, _ := gru.Forward(vec)
+				pred := make([]float64, len(loadedModel.OutputBias))
+				for j := range loadedModel.OutputWeights {
+					pred[j] = rnn.Dot(hout, loadedModel.OutputWeights[j]) + loadedModel.OutputBias[j]
+				}
+				next := rnn.FindClosestWord(pred, tfidfModel)
+				predicted = predicted + " " + next
+				fmt.Printf("-> %s\n", predicted)
+			}
+		}
 	default:
 		fmt.Println("Invalid mode. Use -mode with one of: addnew, addpredict, addTrain, countnew, countpredict, countingTrain, combineTech, protein, list, or drop")
 	}

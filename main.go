@@ -17,6 +17,7 @@ import (
 	"github.com/infiniteCrank/mathbot/db"
 	"github.com/infiniteCrank/mathbot/elm"
 	"github.com/infiniteCrank/mathbot/fileLoader"
+	"github.com/infiniteCrank/mathbot/gpt"
 	"github.com/infiniteCrank/mathbot/rnn"
 	"github.com/infiniteCrank/mathbot/tfidf"
 	_ "github.com/lib/pq"
@@ -1192,6 +1193,9 @@ func main() {
 				fmt.Printf("-> %s\n", predicted)
 			}
 		}
+	case "gpt":
+		gpt.Train()
+		fmt.Println("Generated:", gpt.GenerateText([]string{"i", "love"}, 5))
 	default:
 		fmt.Println("Invalid mode. Use -mode with one of: addnew, addpredict, addTrain, countnew, countpredict, countingTrain, combineTech, protein, list, or drop")
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"regexp"
 	"strings"
 )
 
@@ -162,11 +163,16 @@ func project(x [][]float64, W [][]float64) [][]float64 {
 
 func scaledDotProduct(Q, K [][]float64) [][]float64 {
 	n := len(Q)
+	d := float64(len(Q[0]))
 	scores := make([][]float64, n)
 	for i := range scores {
 		scores[i] = make([]float64, n)
 		for j := range scores[i] {
-			scores[i][j] = dot(Q[i], K[j]) / math.Sqrt(float64(len(Q[0])))
+			if j > i {
+				scores[i][j] = -1e9 // mask future positions (causal)
+			} else {
+				scores[i][j] = dot(Q[i], K[j]) / math.Sqrt(d)
+			}
 		}
 	}
 	return scores
@@ -257,16 +263,10 @@ func multiHeadAttention(x [][]float64) [][]float64 {
 	return unflatten(heads)
 }
 
-func predictNextToken(inputIndices []int, temperature float64, training bool) ([]float64, []float64) {
-	const dropoutRate = 0.1
-	x := make([][]float64, len(inputIndices))
-	for i, idx := range inputIndices {
-		x[i] = addVec(embedding[idx], posEnc[i])
-	}
-	context := multiHeadAttention(x)
-	summary := meanVecs(context)
+const numLayers = 2
 
-	hidden := matVecMul(Wff1, summary)
+func TransformerBlock(x []float64, training bool, dropoutRate float64) []float64 {
+	hidden := matVecMul(Wff1, x)
 	for i := range hidden {
 		hidden[i] += Bff1[i]
 		if hidden[i] < 0 {
@@ -276,18 +276,46 @@ func predictNextToken(inputIndices []int, temperature float64, training bool) ([
 			}
 		}
 	}
-
 	projected := matVecMul(Wff2, hidden)
 	for i := range projected {
+		projected[i] += hidden[i]
 		projected[i] += Bff2[i]
+	}
+	return projected
+}
+
+func predictNextToken(inputIndices []int, temperature float64, training bool) ([]float64, []float64) {
+	const dropoutRate = 0.1
+	x := make([][]float64, seqLen)
+	pad := seqLen - len(inputIndices)
+	for i := 0; i < pad; i++ {
+		x[i] = addVec(embedding[0], posEnc[i]) // pad with "i" + position
+	}
+	for i := pad; i < seqLen; i++ {
+		idx := inputIndices[i-pad]
+		x[i] = addVec(embedding[idx], posEnc[i])
+	}
+
+	contextRaw := multiHeadAttention(x)
+	context := make([][]float64, len(contextRaw))
+	for i := range contextRaw {
+		projected := matVecMul(Wout, contextRaw[i])
+		context[i] = addVec(projected, x[i]) // residual connection
+	}
+
+	summary := meanVecs(context)
+
+	var xVec = summary
+	for layer := 0; layer < numLayers; layer++ {
+		xVec = TransformerBlock(xVec, training, dropoutRate)
 	}
 
 	logits := make([]float64, vocabSize)
 	for i := range logits {
-		logits[i] = dot(Wo[i], projected) + bOut[i]
+		logits[i] = dot(Wo[i], xVec) + bOut[i]
 		logits[i] /= temperature
 	}
-	return softmax(logits), projected
+	return softmax(logits), xVec
 }
 
 func Train() {
@@ -376,4 +404,30 @@ func sample(probs []float64) int {
 		}
 	}
 	return len(probs) - 1
+}
+
+func LoadMarkdownTrainingData(markdown string) [][]string {
+	lines := strings.Split(markdown, "\n")
+	var training [][]string
+	re := regexp.MustCompile(`[a-zA-Z0-9]+`)
+	for _, line := range lines {
+		words := re.FindAllString(strings.ToLower(line), -1)
+		if len(words) <= seqLen {
+			continue
+		}
+		for i := 0; i <= len(words)-seqLen-1; i++ {
+			window := words[i : i+seqLen+1]
+			valid := true
+			for _, w := range window {
+				if _, ok := wordToIdx[w]; !ok {
+					valid = false
+					break
+				}
+			}
+			if valid {
+				training = append(training, window)
+			}
+		}
+	}
+	return training
 }

@@ -6,11 +6,12 @@ import (
 	"math"
 	"math/rand"
 	"regexp"
+	"sort"
 	"strings"
 )
 
 // Vocabulary setup
-var vocab = []string{"i", "love", "learning", "python", "is", "fun", "enjoy", "new", "things", "to", "code", "every", "day", "never", "stops", "am", "golang", "and", "go", "are", "awesome"}
+var vocab = []string{}
 var wordToIdx = map[string]int{}
 var idxToWord = map[int]string{}
 var vocabSize = len(vocab)
@@ -40,7 +41,27 @@ var (
 )
 
 // Initialization
-func init() {
+func InitFromMarkdownFiles(files []string) {
+	re := regexp.MustCompile(`[a-zA-Z0-9]+`)
+	wordMap := make(map[string]struct{})
+	for _, text := range files {
+		lines := strings.Split(text, "\n")
+		for _, line := range lines {
+			words := re.FindAllString(strings.ToLower(line), -1)
+			for _, w := range words {
+				wordMap[w] = struct{}{}
+			}
+		}
+	}
+
+	vocab = []string{}
+	for w := range wordMap {
+		vocab = append(vocab, w)
+	}
+	sort.Strings(vocab)
+	vocabSize = len(vocab)
+	wordToIdx = make(map[string]int)
+	idxToWord = make(map[int]string)
 	for i, w := range vocab {
 		wordToIdx[w] = i
 		idxToWord[i] = w
@@ -53,7 +74,6 @@ func init() {
 		Wk[i] = randMatrix(embedDim, headDim)
 		Wv[i] = randMatrix(embedDim, headDim)
 	}
-
 	Wout = randMatrix(embedDim, embedDim)
 	Wo = randMatrix(vocabSize, embedDim)
 	bOut = make([]float64, vocabSize)
@@ -62,20 +82,34 @@ func init() {
 	Bff1 = make([]float64, embedDim)
 	Wff2 = randMatrix(embedDim, embedDim)
 	Bff2 = make([]float64, embedDim)
+
+	trainingData = [][]string{}
+	for _, text := range files {
+		lines := strings.Split(text, " ")
+		for _, line := range lines {
+			words := re.FindAllString(strings.ToLower(line), -1)
+			if len(words) <= seqLen {
+				continue
+			}
+			for i := 0; i <= len(words)-seqLen-1; i++ {
+				window := words[i : i+seqLen+1]
+				valid := true
+				for _, w := range window {
+					if _, ok := wordToIdx[w]; !ok {
+						valid = false
+						break
+					}
+				}
+				if valid {
+					trainingData = append(trainingData, window)
+				}
+			}
+		}
+	}
 }
 
 // Training data
-var trainingData = [][]string{
-	{"i", "love", "learning", "python"},
-	{"python", "is", "fun"},
-	{"i", "enjoy", "learning"},
-	{"love", "learning", "new", "things"},
-	{"i", "love", "to", "code"},
-	{"code", "every", "day"},
-	{"learning", "never", "stops"},
-	{"i", "am", "learning", "golang"},
-	{"python", "and", "go", "are", "awesome"},
-}
+var trainingData = [][]string{}
 
 // Utility functions
 func randMatrix(rows, cols int) [][]float64 {
@@ -404,30 +438,4 @@ func sample(probs []float64) int {
 		}
 	}
 	return len(probs) - 1
-}
-
-func LoadMarkdownTrainingData(markdown string) [][]string {
-	lines := strings.Split(markdown, "\n")
-	var training [][]string
-	re := regexp.MustCompile(`[a-zA-Z0-9]+`)
-	for _, line := range lines {
-		words := re.FindAllString(strings.ToLower(line), -1)
-		if len(words) <= seqLen {
-			continue
-		}
-		for i := 0; i <= len(words)-seqLen-1; i++ {
-			window := words[i : i+seqLen+1]
-			valid := true
-			for _, w := range window {
-				if _, ok := wordToIdx[w]; !ok {
-					valid = false
-					break
-				}
-			}
-			if valid {
-				training = append(training, window)
-			}
-		}
-	}
-	return training
 }

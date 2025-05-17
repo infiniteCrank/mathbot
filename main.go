@@ -1194,8 +1194,21 @@ func main() {
 			}
 		}
 	case "gpt":
+
+		// Load markdown files
+		files := []string{
+			readFile("corpus/go_textbook.md"),
+			readFile("corpus/go_corpus.md"),
+			readFile("corpus/qa_corpus.md"),
+			readFile("corpus/top50.md"),
+			readFile("corpus/feedback.md"),
+		}
+		gpt.InitFromMarkdownFiles(files)
 		gpt.Train()
-		fmt.Println("Generated:", gpt.GenerateText([]string{"i", "love"}, 5))
+
+		// Generate sample output
+		result := gpt.GenerateText([]string{"go", "is"}, 10)
+		fmt.Println("Generated:", result)
 	default:
 		fmt.Println("Invalid mode. Use -mode with one of: addnew, addpredict, addTrain, countnew, countpredict, countingTrain, combineTech, protein, list, or drop")
 	}
@@ -1374,4 +1387,12 @@ func autoregTest(
 		math.Sqrt(sumSq/count),
 		sumAbs/count,
 	)
+}
+
+func readFile(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		panic(fmt.Sprintf("could not read %s: %v", path, err))
+	}
+	return string(data)
 }

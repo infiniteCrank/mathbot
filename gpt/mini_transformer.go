@@ -18,8 +18,8 @@ var vocabSize = len(vocab)
 
 // Hyperparameters
 const (
-	embedDim     = 4
-	seqLen       = 3
+	embedDim     = 64
+	seqLen       = 16
 	numHeads     = 2
 	headDim      = embedDim / numHeads
 	learningRate = 0.01
@@ -29,6 +29,7 @@ const (
 // Model Parameters
 var (
 	embedding  [][]float64
+	layers     []TransformerLayer
 	Wff1       [][]float64
 	Bff1       []float64
 	Wff2       [][]float64
@@ -78,14 +79,23 @@ func InitFromMarkdownFiles(files []string) {
 	Wo = randMatrix(vocabSize, embedDim)
 	bOut = make([]float64, vocabSize)
 	posEnc = positionalEncoding(seqLen, embedDim)
-	Wff1 = randMatrix(embedDim, embedDim)
-	Bff1 = make([]float64, embedDim)
-	Wff2 = randMatrix(embedDim, embedDim)
-	Bff2 = make([]float64, embedDim)
+	layers = make([]TransformerLayer, numLayers)
+	for i := range layers {
+		layers[i] = TransformerLayer{
+			Wff1: randMatrix(embedDim, embedDim),
+			Bff1: make([]float64, embedDim),
+			Wff2: randMatrix(embedDim, embedDim),
+			Bff2: make([]float64, embedDim),
+			Wq:   randMatrix(embedDim, headDim),
+			Wk:   randMatrix(embedDim, headDim),
+			Wv:   randMatrix(embedDim, headDim),
+			Wout: randMatrix(embedDim, embedDim),
+		}
+	}
 
 	trainingData = [][]string{}
 	for _, text := range files {
-		lines := strings.Split(text, " ")
+		lines := strings.Split(text, "\n")
 		for _, line := range lines {
 			words := re.FindAllString(strings.ToLower(line), -1)
 			if len(words) <= seqLen {
@@ -283,26 +293,50 @@ func crossEntropy(probs []float64, target int) float64 {
 	return -math.Log(probs[target] + 1e-9)
 }
 
-func multiHeadAttention(x [][]float64) [][]float64 {
-	heads := make([][]float64, numHeads)
+func multiHeadAttentionLayer(x [][]float64, layer TransformerLayer) [][]float64 {
+	xNorm := make([][]float64, len(x))
+	for i := range x {
+		xNorm[i] = layerNorm(x[i])
+	}
+
+	headOuts := make([][]float64, numHeads)
 	for h := 0; h < numHeads; h++ {
-		Q := project(x, Wq[h])
-		K := project(x, Wk[h])
-		V := project(x, Wv[h])
+		Q := project(xNorm, layer.Wq)
+		K := project(xNorm, layer.Wk)
+		V := project(xNorm, layer.Wv)
 		scores := scaledDotProduct(Q, K)
 		weights := softmax2D(scores)
 		head := matMatMul(weights, V)
-		heads[h] = flatten(head)
+		headOuts[h] = flatten(head)
 	}
-	return unflatten(heads)
+
+	out := unflatten(headOuts)
+	for i := range out {
+		proj := matVecMul(layer.Wout, out[i])
+		out[i] = addVec(proj, x[i]) // residual connection
+	}
+	return out
 }
 
 const numLayers = 2
 
-func TransformerBlock(x []float64, training bool, dropoutRate float64) []float64 {
-	hidden := matVecMul(Wff1, x)
+type TransformerLayer struct {
+	Wff1 [][]float64
+	Bff1 []float64
+	Wff2 [][]float64
+	Bff2 []float64
+	Wq   [][]float64
+	Wk   [][]float64
+	Wv   [][]float64
+	Wout [][]float64
+}
+
+func TransformerBlock(x []float64, l TransformerLayer, training bool, dropoutRate float64) []float64 {
+	xNorm := layerNorm(x)
+	ffnInput := layerNorm(xNorm) // positional layer norm before FFN
+	hidden := matVecMul(l.Wff1, ffnInput)
 	for i := range hidden {
-		hidden[i] += Bff1[i]
+		hidden[i] += l.Bff1[i]
 		if hidden[i] < 0 {
 			hidden[i] = 0
 			if training && rand.Float64() < dropoutRate {
@@ -310,12 +344,11 @@ func TransformerBlock(x []float64, training bool, dropoutRate float64) []float64
 			}
 		}
 	}
-	projected := matVecMul(Wff2, hidden)
+	projected := matVecMul(l.Wff2, hidden)
 	for i := range projected {
-		projected[i] += hidden[i]
-		projected[i] += Bff2[i]
+		projected[i] += l.Bff2[i]
 	}
-	return projected
+	return addVec(projected, x) // residual connection
 }
 
 func predictNextToken(inputIndices []int, temperature float64, training bool) ([]float64, []float64) {
@@ -330,18 +363,16 @@ func predictNextToken(inputIndices []int, temperature float64, training bool) ([
 		x[i] = addVec(embedding[idx], posEnc[i])
 	}
 
-	contextRaw := multiHeadAttention(x)
-	context := make([][]float64, len(contextRaw))
-	for i := range contextRaw {
-		projected := matVecMul(Wout, contextRaw[i])
-		context[i] = addVec(projected, x[i]) // residual connection
+	for layer := 0; layer < numLayers; layer++ {
+		x = multiHeadAttentionLayer(x, layers[layer])
 	}
+	context := x
 
 	summary := meanVecs(context)
 
 	var xVec = summary
 	for layer := 0; layer < numLayers; layer++ {
-		xVec = TransformerBlock(xVec, training, dropoutRate)
+		xVec = TransformerBlock(xVec, layers[layer], training, dropoutRate)
 	}
 
 	logits := make([]float64, vocabSize)
@@ -422,20 +453,37 @@ func GenerateText(start []string, tokens int) string {
 			}
 		}
 		probs, _ := predictNextToken(input, temp, false)
-		maxIdx := sample(probs)
+		maxIdx := topKSample(probs, 5)
 		seq = append(seq, idxToWord[maxIdx])
 	}
 	return strings.Join(seq, " ")
 }
 
-func sample(probs []float64) int {
-	r := rand.Float64()
-	cumulative := 0.0
+func topKSample(probs []float64, k int) int {
+	type kv struct {
+		idx int
+		val float64
+	}
+	sorted := make([]kv, len(probs))
 	for i, p := range probs {
-		cumulative += p
+		sorted[i] = kv{i, p}
+	}
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].val > sorted[j].val
+	})
+
+	topK := sorted[:k]
+	sum := 0.0
+	for _, item := range topK {
+		sum += item.val
+	}
+	r := rand.Float64() * sum
+	cumulative := 0.0
+	for _, item := range topK {
+		cumulative += item.val
 		if r < cumulative {
-			return i
+			return item.idx
 		}
 	}
-	return len(probs) - 1
+	return topK[len(topK)-1].idx
 }

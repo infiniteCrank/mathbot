@@ -736,9 +736,33 @@ func Train() {
 		// Update all transformer layer parameters using Adam
 		for i := range layers {
 			layers[i] = adamUpdateLayer(layers[i], mLayers[i], vLayers[i], learningRate, beta1, beta2, eps, epoch+1)
+			resetGradients(&layers[i])
 		}
 	}
 
+}
+
+func resetGradients(l *TransformerLayer) {
+	zeroOut := func(mat [][]float64) {
+		for i := range mat {
+			for j := range mat[i] {
+				mat[i][j] = 0
+			}
+		}
+	}
+	zeroVec := func(vec []float64) {
+		for i := range vec {
+			vec[i] = 0
+		}
+	}
+	zeroOut(l.GradWq)
+	zeroOut(l.GradWk)
+	zeroOut(l.GradWv)
+	zeroOut(l.GradWout)
+	zeroOut(l.GradWff1)
+	zeroOut(l.GradWff2)
+	zeroVec(l.GradBff1)
+	zeroVec(l.GradBff2)
 }
 
 func GenerateText(start []string, tokens int) string {
